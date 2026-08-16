@@ -69,7 +69,7 @@
                   {
                       "path":  "updater.js",
                       "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/updater.js",
-                      "sha256":  "dbe6a32e3aa2c910d2f5d82f59caa4a71161389d22c2093db151c751c5313fb5"
+                      "sha256":  "b5b7fca2546a998d53cf59e99649f3b66720f4a6c0f7d647f0e28790eaa3141e"
                   }
               ],
     "version":  "0.2.1"

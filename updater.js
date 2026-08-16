@@ -241,7 +241,8 @@ async function runUpdate() {
       copyTree(backupDir, launcherDir);
     } catch (e) { /* noop */ }
     try { fs.unlinkSync(lockPath); } catch (e) { /* noop */ }
-    setStatus(UI_FAILED, true);
+    try { fs.writeFileSync(path.join(updateDir, 'updater-error.log'), String(err && err.stack || err), 'utf8'); } catch (e) { /* noop */ }
+    setStatus(UI_FAILED + ' ' + String(err && err.message || err), true);
     await sleep(1800);
     relaunchLauncher();
     app.exit(0);
