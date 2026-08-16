@@ -173,10 +173,16 @@ async function runUpdate() {
   try {
     // lock-защита от двух апдейтеров
     if (fs.existsSync(lockPath)) {
-      setStatus(UI_FAILED, true);
-      await sleep(1200);
-      app.exit(1);
-      return;
+      const oldPid = parseInt(fs.readFileSync(lockPath, 'utf8'), 10) || 0;
+      let alive = false;
+      try { process.kill(oldPid, 0); alive = true; } catch (e) { alive = false; }
+      if (alive) {
+        setStatus(UI_FAILED, true);
+        await sleep(1200);
+        app.exit(1);
+        return;
+      }
+      try { fs.unlinkSync(lockPath); } catch (e) { /* noop */ }
     }
     fs.mkdirSync(updateDir, { recursive: true });
     fs.writeFileSync(lockPath, String(process.pid), 'utf8');
