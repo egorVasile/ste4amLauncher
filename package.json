@@ -1,0 +1,38 @@
+﻿{
+    "name":  "st4am-launcher",
+    "productName":  "st4amLauncher",
+    "version":  "0.2.1",
+    "description":  "Лаунчер Minecraft в стиле официального (дизайн A)",
+    "main":  "src/main/main.js",
+    "scripts":  {
+                    "start":  "electron .",
+                    "build":  "electron-builder --win"
+                },
+    "author":  "st4am",
+    "license":  "MIT",
+    "devDependencies":  {
+                            "electron":  "^33.0.0",
+                            "electron-builder":  "^25.0.0"
+                        },
+    "build":  {
+                  "appId":  "com.st4am.launcher",
+                  "productName":  "st4amLauncher",
+                  "files":  [
+                                "src/**/*",
+                                "package.json"
+                            ],
+                  "win":  {
+                              "target":  "nsis",
+                              "icon":  "resources/icon.png"
+                          },
+                  "nsis":  {
+                               "oneClick":  false,
+                               "allowToChangeInstallationDirectory":  true,
+                               "createDesktopShortcut":  "always",
+                               "createStartMenuShortcut":  true,
+                               "shortcutName":  "st4amLauncher",
+                               "runAfterFinish":  true,
+                               "artifactName":  "st4amLauncher-Setup-${version}.${ext}"
+                           }
+              }
+}
