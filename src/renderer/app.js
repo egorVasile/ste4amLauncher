@@ -1295,7 +1295,8 @@
     const frac = typeof p.frac === 'number' ? p.frac : 0;
     const pct = Math.max(0, Math.min(100, Math.round(frac * 100)));
     if (fill) fill.style.width = pct + '%';
-    if (lbl) lbl.textContent = 'УСТАНОВКА: ' + String(p.name || '').toUpperCase() + ' ' + pct + '%';
+    const name = String(p.name || '').toUpperCase();
+    if (lbl) lbl.textContent = 'УСТАНОВКА: ' + (name === 'ЗАГРУЗЧИК' ? 'ЗАГРУЗЧИК' : name) + ' ' + pct + '%';
   }
 
   function hideProgress() {
