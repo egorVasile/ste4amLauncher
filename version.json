@@ -64,7 +64,7 @@
                   {
                       "path":  "package.json",
                       "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/package.json",
-                      "sha256":  "ed962f162206b50c192c8487f26f64872b22a2fdd0acf11dcdf98172493b2882"
+                      "sha256":  "79f5d27a1b242d94e54c27272e0671244f4ebc6fa8ad3166fcb1c3ee8f1c139c"
                   },
                   {
                       "path":  "updater.js",
