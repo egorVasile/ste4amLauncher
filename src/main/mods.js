@@ -1,4 +1,4 @@
-﻿'use strict';
+'use strict';
 const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
@@ -114,6 +114,53 @@ async function mr(pathname, qs) {
   const q = qs ? '?' + new URLSearchParams(qs) : '';
   const buf = await httpGet(MR + pathname + q);
   return JSON.parse(buf.toString('utf8'));
+}
+
+/* ============ Кеширование меты (ускорение создания сборок) ============ */
+
+const CACHE_TTL = {
+  manifest: 6 * 3600 * 1000,      // version_manifest_v2.json
+  loaderList: 24 * 3600 * 1000,   // списки загрузчиков Fabric/Quilt
+  profile: 24 * 3600 * 1000,      // профили загрузчиков
+  mavenXml: 6 * 3600 * 1000       // maven-metadata.xml
+};
+
+async function cacheRead(name, ttl) {
+  const p = path.join(ROOT, 'cache', name);
+  try {
+    const st = fs.statSync(p);
+    if (Date.now() - st.mtimeMs < ttl) return await fsp.readFile(p, 'utf8');
+  } catch (e) {}
+  return null;
+}
+
+async function cacheWrite(name, text) {
+  try {
+    await fsp.mkdir(path.join(ROOT, 'cache'), { recursive: true });
+    await fsp.writeFile(path.join(ROOT, 'cache', name), text);
+  } catch (e) {}
+}
+
+async function cachedJson(url, name, ttl) {
+  const hit = await cacheRead(name, ttl);
+  if (hit !== null) { try { return JSON.parse(hit); } catch (e) {} }
+  const buf = await httpGet(url);
+  const j = JSON.parse(buf.toString('utf8'));
+  await cacheWrite(name, JSON.stringify(j));
+  return j;
+}
+
+async function cachedText(url, name, ttl) {
+  const hit = await cacheRead(name, ttl);
+  if (hit !== null) return hit;
+  const buf = await httpGet(url);
+  const txt = buf.toString('utf8');
+  await cacheWrite(name, txt);
+  return txt;
+}
+
+async function cachedManifest() {
+  return cachedJson('https://launchermeta.mojang.com/mc/game/version_manifest_v2.json', 'version_manifest.json', CACHE_TTL.manifest);
 }
 
 /* ============ Modrinth: каталог ============ */
@@ -241,11 +288,11 @@ async function installLoader(build, gameVersion, loader, onProgress) {
     const url = L === 'fabric'
       ? `${FABRIC_META}/versions/loader/${gameVersion}`
       : `${QUILT_META}/versions/loader/${gameVersion}`;
-    const list = JSON.parse((await httpGet(url)).toString('utf8'));
+    const list = await cachedJson(url, 'loader-list-' + L + '-' + gameVersion + '.json', CACHE_TTL.loaderList);
     if (!list.length) throw new Error('Нет загрузчиков для ' + gameVersion);
     const loaderVer = list[0].loader.version;
     const profileUrl = `${meta}/versions/loader/${gameVersion}/${loaderVer}/profile/json`;
-    const profile = JSON.parse((await httpGet(profileUrl)).toString('utf8'));
+    const profile = await cachedJson(profileUrl, 'loader-profile-' + L + '-' + gameVersion + '-' + loaderVer + '.json', CACHE_TTL.profile);
     profile.id = build.id;
     profile.mainClass = L === 'fabric'
       ? 'net.fabricmc.loader.impl.launch.knot.KnotClient'
@@ -296,7 +343,7 @@ async function writeVersionJson(build, gameVersion, profile) {
 async function readBaseVersion(gameVersion) {
   const cache = path.join(ROOT, 'versions', gameVersion, gameVersion + '.json');
   try { return JSON.parse(await fsp.readFile(cache, 'utf8')); } catch (e) {}
-  const manifest = JSON.parse((await httpGet('https://launchermeta.mojang.com/mc/game/version_manifest_v2.json')).toString('utf8'));
+  const manifest = await cachedManifest();
   const v = (manifest.versions || []).find(x => x.id === gameVersion);
   if (!v) throw new Error('Версия не найдена: ' + gameVersion);
   const buf = await httpGet(v.url);
@@ -334,15 +381,15 @@ async function installForgeLike(build, gameVersion, loader, onProgress) {
   let installerUrl = null;
   let installerName = null;
   if (isNeo) {
-    const buf = await httpGet('https://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml');
-    const all = [...buf.toString('utf8').matchAll(/<version>([^<]+)<\/version>/g)].map(m => m[1]);
+    const xml = await cachedText('https://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml', 'maven-neoforge.xml', CACHE_TTL.mavenXml);
+    const all = [...xml.matchAll(/<version>([^<]+)<\/version>/g)].map(m => m[1]);
     const ver = pickLoaderVersion(all, gameVersion, true);
     if (!ver) throw new Error('NeoForge не поддерживает ' + gameVersion);
     installerUrl = `https://maven.neoforged.net/releases/net/neoforged/neoforge/${ver}/neoforge-${ver}-installer.jar`;
     installerName = `neoforge-${ver}-installer.jar`;
   } else {
-    const buf = await httpGet('https://maven.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml');
-    const all = [...buf.toString('utf8').matchAll(/<version>([^<]+)<\/version>/g)].map(m => m[1]);
+    const xml = await cachedText('https://maven.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml', 'maven-forge.xml', CACHE_TTL.mavenXml);
+    const all = [...xml.matchAll(/<version>([^<]+)<\/version>/g)].map(m => m[1]);
     const ver = pickLoaderVersion(all, gameVersion, false);
     if (!ver) throw new Error('Forge не поддерживает ' + gameVersion);
     installerUrl = `https://maven.minecraftforge.net/net/minecraftforge/forge/${ver}/forge-${ver}-installer.jar`;
@@ -350,8 +397,15 @@ async function installForgeLike(build, gameVersion, loader, onProgress) {
   }
   const bdir = buildDir(build.id);
   const installerPath = path.join(bdir, installerName);
+  const cacheInstall = path.join(ROOT, 'cache', 'installers', installerName);
   if (onProgress) onProgress(0);
-  await downloadFile(installerUrl, installerPath, (p) => onProgress && onProgress(0.05 + p * 0.25));
+  if (!fs.existsSync(cacheInstall) || fs.statSync(cacheInstall).size === 0) {
+    await downloadFile(installerUrl, cacheInstall, (p) => onProgress && onProgress(0.05 + p * 0.25));
+  } else {
+    log('installer из кеша:', installerName);
+    if (onProgress) onProgress(0.3);
+  }
+  try { await fsp.copyFile(cacheInstall, installerPath); } catch (e) {}
   const needMajor = forgeJavaMajor(gameVersion);
   let java = await findJavaMajor(needMajor);
   if (!java) {
