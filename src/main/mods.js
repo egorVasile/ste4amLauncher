@@ -398,28 +398,34 @@ async function installForgeLike(build, gameVersion, loader, onProgress) {
   const bdir = buildDir(build.id);
   const installerPath = path.join(bdir, installerName);
   const cacheInstall = path.join(ROOT, 'cache', 'installers', installerName);
-  if (onProgress) onProgress(0);
+  if (onProgress) onProgress(0.03, 'Скачивание установщика ' + loader + '...');
   if (!fs.existsSync(cacheInstall) || fs.statSync(cacheInstall).size === 0) {
-    await downloadFile(installerUrl, cacheInstall, (p) => onProgress && onProgress(0.05 + p * 0.25));
+    await downloadFile(installerUrl, cacheInstall, (p) => onProgress && onProgress(0.05 + p * 0.25, 'Скачивание установщика ' + loader + '...'));
   } else {
     log('installer из кеша:', installerName);
-    if (onProgress) onProgress(0.3);
+    if (onProgress) onProgress(0.3, 'Установщик из кеша');
   }
   try { await fsp.copyFile(cacheInstall, installerPath); } catch (e) {}
   const needMajor = forgeJavaMajor(gameVersion);
   let java = await findJavaMajor(needMajor);
   if (!java) {
-    java = await ensureJavaRuntime(needMajor, (p) => onProgress && onProgress(0.32 + p * 0.45));
+    if (onProgress) onProgress(0.31, 'Скачивание Java ' + needMajor + '...');
+    java = await ensureJavaRuntime(needMajor, (p) => onProgress && onProgress(0.31 + p * 0.45, 'Скачивание Java ' + needMajor + '...'));
   }
   const gameDir = path.join(bdir, 'game');
   await ensureFakeLauncherProfile(gameDir);
+  if (onProgress) onProgress(0.78, 'Установка ' + loader + ' (это занимает минуту)...');
+  log('запуск установщика', installerName, 'java:', java);
   await new Promise((resolve, reject) => {
     const p = spawn(java, ['-jar', installerPath, '--installClient', gameDir], { windowsHide: true });
     let out = '';
-    p.stdout.on('data', c => out += c.toString());
+    let last = Date.now();
+    const tick = setInterval(() => { if (onProgress) onProgress(Math.min(0.97, 0.78 + (Date.now() - last) / 60000 * 0.18), 'Установка ' + loader + ' (это занимает минуту)...'); }, 250);
+    p.stdout.on('data', c => { out += c.toString(); });
     p.stderr.on('data', c => out += c.toString());
-    p.on('error', reject);
+    p.on('error', (e) => { clearInterval(tick); reject(e); });
     p.on('close', (code) => {
+      clearInterval(tick);
       if (code === 0) resolve();
       else reject(new Error('Установка ' + loader + ' не удалась (код ' + code + '): ' + out.slice(-300)));
     });
@@ -683,6 +689,15 @@ async function downloadFileStream(url, dest, onProgress) {
   throw new Error('Не удалось скачать ' + url);
 }
 
+const AZUL_API = (major) => `https://api.azul.com/metadata/v1/zulu/packages/?java_version=${major}&os=windows&arch=x64&java_package_type=jre&archive_type=zip&latest=true&release_status=ga&availability_types=CA&page_size=1`;
+
+async function azulJreUrl(major) {
+  const buf = await httpGet(AZUL_API(major));
+  const arr = JSON.parse(buf.toString('utf8'));
+  if (!Array.isArray(arr) || !arr.length || !arr[0].download_url) throw new Error('Azul не вернул JRE ' + major);
+  return arr[0].download_url;
+}
+
 async function ensureJavaRuntime(major, onProgress) {
   const javaRoot = path.join(ROOT, 'java');
   const home = path.join(javaRoot, String(major));
@@ -690,12 +705,20 @@ async function ensureJavaRuntime(major, onProgress) {
   if (fs.existsSync(exe)) return exe;
   await fsp.mkdir(javaRoot, { recursive: true });
   const zip = path.join(javaRoot, 'jre-' + major + '.zip');
-  log('скачивание Java', major);
-  await downloadFileStream(
-    `https://api.adoptium.net/v3/binary/latest/${major}/ga/windows/x64/jre/hotspot/normal/eclipse`,
-    zip,
-    (p) => onProgress && onProgress(0.85 * p)
-  );
+  if (fs.existsSync(zip) && fs.statSync(zip).size > 100000) {
+    log('jre-' + major + '.zip из кеша');
+  } else {
+    log('поиск ссылки JRE', major, 'на Azul CDN');
+    if (onProgress) onProgress(0.03);
+    let src;
+    try { src = await azulJreUrl(major); }
+    catch (e) {
+      log('Azul недоступен, фолбэк на Adoptium:', e.message);
+      src = `https://api.adoptium.net/v3/binary/latest/${major}/ga/windows/x64/jre/hotspot/normal/eclipse`;
+    }
+    await downloadFileStream(src, zip, (p) => onProgress && onProgress(0.03 + 0.92 * p));
+  }
+  if (onProgress) onProgress(0.96);
   const tmp = path.join(javaRoot, 'tmp-' + major + '-' + Date.now());
   await fsp.mkdir(tmp, { recursive: true });
   const ok = await execOut('powershell.exe', [
