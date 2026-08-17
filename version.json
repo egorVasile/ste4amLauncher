@@ -14,7 +14,7 @@
                   {
                       "path":  "src/main/mods.js",
                       "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/main/mods.js",
-                      "sha256":  "8a68bb8ce1fb819e58cea82a3e32b5de3f4ecaae369520d05885353db4dc495f"
+                      "sha256":  "69faf8b6deaa586e4c80e34c6a960f347332c6b521026d28fbf08f33a7a7a970"
                   },
                   {
                       "path":  "src/main/store.js",
@@ -34,7 +34,7 @@
                   {
                       "path":  "src/renderer/app.js",
                       "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/renderer/app.js",
-                      "sha256":  "d197d5990a7a0c290c282a514339a9229f2740b7e106e80afc45c2e2e18c6f1d"
+                      "sha256":  "96d5776fdd0461214c6cb54186cfc980275e8abc40372191fe0b3ec5cbc82c84"
                   },
                   {
                       "path":  "src/renderer/icon.png",
@@ -49,7 +49,7 @@
                   {
                       "path":  "src/renderer/index.html",
                       "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/renderer/index.html",
-                      "sha256":  "809ddc6ced028c2c2cf320b42f95bbcfe8de949e399adeee55f259f4148aa86b"
+                      "sha256":  "a5681ade0f792625303151df8388d1a7d43ab8a23329496883bb3991c7d6aaf2"
                   },
                   {
                       "path":  "src/renderer/fonts/MinecraftSeven.woff2",
@@ -64,7 +64,7 @@
                   {
                       "path":  "package.json",
                       "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/package.json",
-                      "sha256":  "79f5d27a1b242d94e54c27272e0671244f4ebc6fa8ad3166fcb1c3ee8f1c139c"
+                      "sha256":  "b234c20d60c2a32dca81a20f2771a605495fc9bbd5f994a97222d3b0dc340314"
                   },
                   {
                       "path":  "updater.js",
@@ -72,5 +72,5 @@
                       "sha256":  "99df87de813c74dff4012cc9326563f2099bf6183a04912f5e11bb52f78547a8"
                   }
               ],
-    "version":  "0.2.2"
+    "version":  "0.2.3"
 }
