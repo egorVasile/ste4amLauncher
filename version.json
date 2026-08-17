@@ -24,7 +24,7 @@
     {
       "path": "src/main/update.js",
       "url": "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/main/update.js",
-      "sha256": "5c8277e258b3e3a0cfac176db96609a9373b8704665fa7f08fea01747eb4ca2d"
+      "sha256": "3fc08274a00bbfda361bc5d5219a6f5400585e4dd3cf5f110464ecf6d5596337"
     },
     {
       "path": "src/preload/preload.js",
@@ -64,7 +64,7 @@
     {
       "path": "package.json",
       "url": "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/package.json",
-      "sha256": "e5292b50a35000958c96ae8d872b2b1ce62f73e43a22e3e2ca1880555ecdd58b"
+      "sha256": "1e548f732af7ef44ea817b6142d2b6756fac7ecd6bb474e9b73dadaec7cecfbe"
     },
     {
       "path": "updater.js",
@@ -72,5 +72,5 @@
       "sha256": "99df87de813c74dff4012cc9326563f2099bf6183a04912f5e11bb52f78547a8"
     }
   ],
-  "version": "0.2.4"
+  "version": "0.2.5"
 }
