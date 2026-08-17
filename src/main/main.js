@@ -201,7 +201,7 @@ function registerIpc() {
       gameVersion: opts && opts.gameVersion,
       loader: opts && opts.loader,
       icon: opts && opts.icon,
-      onProgress: fr => e.sender.send('builds:progress', { name: 'Загрузчик', frac: fr })
+      onProgress: (fr, stage) => e.sender.send('builds:progress', { name: stage || 'Загрузчик', frac: fr })
     });
     emit('builds:changed', {});
     return b;
