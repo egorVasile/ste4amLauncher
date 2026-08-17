@@ -107,7 +107,7 @@ async function launchUpdater(store) {
   const manifest = lastManifest || (await fetchJson(base + 'version.json'));
   if (!manifest || !Array.isArray(manifest.files)) throw new Error('bad manifest');
 
-  const launcherDir = path.resolve(__dirname, '..', '..');
+  const launcherDir = app.getAppPath();
   const updateDir = path.join(launcherDir, 'update');
   fs.mkdirSync(updateDir, { recursive: true });
 
@@ -116,7 +116,8 @@ async function launchUpdater(store) {
   fs.writeFileSync(path.join(updateDir, 'manifest.json'), JSON.stringify(manifest, null, 2), 'utf8');
 
   const args = [updaterPath, launcherDir, String(process.pid), path.join(updateDir, 'manifest.json')];
-  const child = spawn(process.execPath, args, { detached: true, stdio: 'ignore' });
+  const env = Object.assign({}, process.env, { ELECTRON_RUN_AS_NODE: '1' });
+  const child = spawn(process.execPath, args, { detached: true, stdio: 'ignore', env });
   child.unref();
   return true;
 }
