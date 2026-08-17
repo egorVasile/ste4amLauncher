@@ -71,6 +71,12 @@
 
   html, body { height: 100%; overflow: hidden; }
 
+  /* При скрытии/сворачивании окна (html.anim-paused) все CSS-анимации
+     ставятся на паузу — CPU в фоне падает к нулю, внешний вид не меняется */
+  html.anim-paused *, html.anim-paused *::before, html.anim-paused *::after {
+    animation-play-state: paused !important;
+  }
+
   body {
     background: var(--mc-bg);
     color: var(--mc-off-white);
@@ -1001,6 +1007,8 @@
   .b-page .b-mini { flex: 0 0 auto; padding: 5px 12px 7px; }
   .b-ver-row { display: flex; flex-direction: column; gap: 6px; }
   .b-ver-row .b-mini { padding: 8px 0 10px; font-size: 12px; }
+  /* подсветка нужной версии (из диагноза) */
+  .b-ver-row.hl { outline: 2px solid #4db8ff; outline-offset: -2px; background: rgba(77,184,255,.08); }
 
   /* ===== Скрытый помощник ===== */
   .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); }

@@ -3,6 +3,7 @@ const { app, BrowserWindow, ipcMain, shell } = require('electron');
 const os = require('os');
 const path = require('path');
 const fs = require('fs');
+const fsp = require('fs/promises');
 const { execFile } = require('child_process');
 
 const maxRamGb = () => Math.max(2, Math.floor(os.totalmem() / 1073741824) - 1);
@@ -33,6 +34,8 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      spellcheck: false,
+      backgroundThrottling: true,
       preload: path.join(__dirname, '..', 'preload', 'preload.js')
     }
   });
@@ -75,6 +78,7 @@ const launchEmitter = (type, data) => {
   else if (type === 'error') emit('launch:error', { message: data.message });
   else if (type === 'started') emit('launch:started', { pid: data.pid });
   else if (type === 'exit') emit('launch:exit', { code: data.code });
+  else if (type === 'diagnosis') emit('launch:diagnosis', data);
 };
 
 function registerIpc() {
@@ -106,6 +110,45 @@ function registerIpc() {
     const allowed = ['username', 'ram', 'mirror', 'javaPath', 'language', 'showSnapshots', 'optimize', 'jvmArgs', 'closeLauncherOnGame', 'showOldVersions', 'experimental', 'theme', 'width', 'height', 'launcherMode', 'updateUrl'];
     if (!allowed.includes(key)) throw new Error('Bad key');
     store.set(key, value);
+    // При изменении username обновляем активный аккаунт, если он существует
+    if (key === 'username' && store.get('activeAccountId')) {
+      const acct = store.data.accounts.find(a => a.id === store.get('activeAccountId'));
+      if (acct) acct.username = value;
+    }
+    return true;
+  });
+
+  // IPC-handlers for accounts management
+  ipcMain.handle('accounts:list', () => store.accountsList());
+
+  ipcMain.handle('accounts:add', (_e, account) => {
+    // account: { username, userType, accessToken?, uuid? }
+    // Если передан accessToken — это ely.by аккаунт, иначе оффлайн
+    const isOnline = !!account.accessToken;
+    const newAccount = {
+      id: 'account-' + Date.now(),
+      username: account.username || 'Player',
+      userType: isOnline ? 'online' : 'legacy',
+      accessToken: isOnline ? account.accessToken : '0',
+      uuid: isOnline ? (account.uuid || '00000000-0000-0000-0000-000000000000') : '00000000-0000-0000-0000-000000000000'
+    };
+    return store.addAccount(newAccount);
+  });
+
+  ipcMain.handle('accounts:remove', (_e, accountId) => store.removeAccount(accountId));
+
+  ipcMain.handle('accounts:select', (_e, accountId) => store.setActiveAccount(accountId));
+
+  ipcMain.handle('accounts:update', (_e, accountId, updates) => {
+    const account = store.data.accounts.find(a => a.id === accountId);
+    if (!account) return false;
+    Object.assign(account, updates);
+    // Ensure credentials are never missing for online accounts
+    if (account.userType === 'online' && (!account.accessToken || account.accessToken === '0')) {
+      account.accessToken = '0'; // fallback to offline
+      account.userType = 'legacy';
+    }
+    store.save();
     return true;
   });
 
@@ -241,6 +284,105 @@ ipcMain.handle('update:now', async () => {
     return ok;
   });
   ipcMain.handle('mods:java', () => mods.findJava());
+
+  // Export / Import builds
+  async function saveDialog(defaultPath) {
+    const { dialog } = require('electron');
+    const res = await dialog.showSaveDialog({
+      defaultPath,
+      filters: [{ name: 'st4am', extensions: ['st4am'] }]
+    });
+    return res.canceled ? null : res.filePath;
+  }
+  async function openDialog() {
+    const { dialog } = require('electron');
+    const res = await dialog.showOpenDialog({
+      filters: [{ name: 'st4am', extensions: ['st4am'] }],
+      properties: ['openFile']
+    });
+    return res.canceled ? null : res.filePaths[0];
+  }
+  ipcMain.handle('dialog:saveFile', async (_e, defaultPath) => saveDialog(defaultPath));
+  ipcMain.handle('dialog:openFile', async () => openDialog());
+  ipcMain.handle('builds:export', async (_e, buildId) => {
+    const filePath = await saveDialog(`build-${buildId}.st4am`);
+    if (!filePath) return { ok: false, canceled: true };
+    try {
+      const result = await mods.exportBuild(buildId);
+      if (!result.ok) return result;
+      await fsp.writeFile(filePath, JSON.stringify(result.manifest, null, 2));
+      console.log('[builds:export] записано:', filePath, 'байт:', JSON.stringify(result.manifest).length);
+      return { ok: true, path: filePath, skipped: result.skipped };
+    } catch (e) {
+      console.error('[builds:export]', e && e.stack || e);
+      return { ok: false, error: e.message };
+    }
+  });
+  ipcMain.handle('builds:import', async (e, filePath) => {
+    console.log('[builds:import] файл:', filePath);
+    try {
+      const stat = await fsp.stat(filePath);
+      console.log('[builds:import] размер:', stat.size, 'байт');
+      const manifest = JSON.parse(await fsp.readFile(filePath, 'utf8'));
+      console.log('[builds:import] манифест:', manifest.name, manifest.gameVersion, manifest.loader, manifest.files.length + ' файлов');
+      const buildId = await mods.importBuild(manifest, (frac, file) => {
+        e.sender.send('builds:progress', { frac, file });
+      });
+      emit('builds:changed', {});
+      console.log('[builds:import] создана сборка:', buildId);
+      return { ok: true, buildId };
+    } catch (e) {
+      console.error('[builds:import]', e && e.stack || e);
+      return { ok: false, error: e.message };
+    }
+  });
+
+  /* ============ Диагностика ошибок запуска ============ */
+  ipcMain.handle('builds:update-mod', async (_e, opts) => {
+    const { buildId, slug, filename, type } = opts || {};
+    if (!buildId || !slug) return { ok: false, error: 'bad args' };
+    try {
+      // удаляем старый файл, если известен
+      if (filename) await mods.deleteMod(buildId, filename, type || 'mod');
+      // ставим последнюю совместимую версию по названию
+      const r = await mods.installProject({
+        buildId, project: slug, versionId: null, withDeps: false, type: type || 'mod', onProgress: null
+      });
+      emit('builds:changed', {});
+      return { ok: true, installed: r.installed };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  });
+  ipcMain.handle('diagnosis:pending', async () => {
+    const diag = require('./diag');
+    return diag.pendingReport();
+  });
+  ipcMain.handle('diagnosis:clear', async () => {
+    const diag = require('./diag');
+    return diag.clearPending();
+  });
+  ipcMain.handle('diagnosis:relaunch', async (_e, opts) => {
+    const { buildId, username, ram } = opts || {};
+    if (!buildId) return { ok: false, error: 'no buildId' };
+    try {
+      const pid = await launcher.launchVersion({
+        version: buildId,
+        buildId,
+        username: typeof username === 'string' && username ? username : store.get('username'),
+        ram: Math.max(1, Math.min(Number.isFinite(ram) ? ram : store.get('ram'), maxRamGb())),
+        accessToken: '0',
+        uuid: null,
+        resolutionW: null,
+        resolutionH: null
+      }, launchEmitter);
+      raisePriority(pid);
+      return { ok: true };
+    } catch (e) {
+      emit('launch:error', { message: e.message });
+      return { ok: false, error: e.message };
+    }
+  });
 }
 
 app.whenReady().then(() => {

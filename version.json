@@ -1,76 +1,81 @@
 {
-  "npmInstall": false,
-  "files": [
-    {
-      "path": "src/main/launcher.js",
-      "url": "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/main/launcher.js",
-      "sha256": "d388cc45cbad8727bc60ed167ab80bd4e12d44e32e4424837b5e77efcdd7b2f9"
-    },
-    {
-      "path": "src/main/main.js",
-      "url": "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/main/main.js",
-      "sha256": "a51c5014f2548c16d190c8e765ee4328c70f1b371e217bd7c9cdec9ce5537726"
-    },
-    {
-      "path": "src/main/mods.js",
-      "url": "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/main/mods.js",
-      "sha256": "e2cd3c4d6ce93cd46bb5c3f6216ef4795bf9657953dc588c279693dfb954c3cf"
-    },
-    {
-      "path": "src/main/store.js",
-      "url": "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/main/store.js",
-      "sha256": "3aeb8769218c2d107e23c6324506a776ffb6ee855cd4dcd97334863af1d40e4d"
-    },
-    {
-      "path": "src/main/update.js",
-      "url": "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/main/update.js",
-      "sha256": "3fc08274a00bbfda361bc5d5219a6f5400585e4dd3cf5f110464ecf6d5596337"
-    },
-    {
-      "path": "src/preload/preload.js",
-      "url": "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/preload/preload.js",
-      "sha256": "ed6093d7f73f358125624b572ea40b226679b0aa32639e1986465f58ea119c8e"
-    },
-    {
-      "path": "src/renderer/app.js",
-      "url": "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/renderer/app.js",
-      "sha256": "745abddda8f22c3603b467d5b744d900822edb07f946ec572f83031b793f97b8"
-    },
-    {
-      "path": "src/renderer/icon.png",
-      "url": "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/renderer/icon.png",
-      "sha256": "ab59ff872197a0f22e9214480447e68b5af02d309ca94c47b17adfc6b688d687"
-    },
-    {
-      "path": "src/renderer/icons.js",
-      "url": "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/renderer/icons.js",
-      "sha256": "a979ba1fc825a1619e1fc6bf443ecfe008b20031ad1a5e7db7638017c5f2095e"
-    },
-    {
-      "path": "src/renderer/index.html",
-      "url": "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/renderer/index.html",
-      "sha256": "a5681ade0f792625303151df8388d1a7d43ab8a23329496883bb3991c7d6aaf2"
-    },
-    {
-      "path": "src/renderer/fonts/MinecraftSeven.woff2",
-      "url": "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/renderer/fonts/MinecraftSeven.woff2",
-      "sha256": "b2840d23454bc5cef67926850733b8b29b9bdd12a6fd75857c03aed7bbd2dc5d"
-    },
-    {
-      "path": "src/renderer/fonts/MinecraftTenV2.woff2",
-      "url": "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/renderer/fonts/MinecraftTenV2.woff2",
-      "sha256": "05c57067ecb4aba78fa6db6c422657c4d87191a9854a95a07e9620b300533551"
-    },
-    {
-      "path": "package.json",
-      "url": "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/package.json",
-      "sha256": "1e548f732af7ef44ea817b6142d2b6756fac7ecd6bb474e9b73dadaec7cecfbe"
-    },
-    {
-      "path": "updater.js",
-      "url": "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/updater.js",
-      "sha256": "82787e878332dfd5e8639de1e374c99286df5e1fe2083f16875ca1300e6aea22"
-    }
-  ],
-  "version": "0.2.5"
+    "npmInstall":  false,
+    "files":  [
+                  {
+                      "path":  "src/main/diag.js",
+                      "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/main/diag.js",
+                      "sha256":  "7d3ef83400d750b2f9c4f7b9eff38bb9f1e5e1fbef3fe3fb8ad6bc4107b5b3f3"
+                  },
+                  {
+                      "path":  "src/main/launcher.js",
+                      "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/main/launcher.js",
+                      "sha256":  "6b4cef10c03b1dad7c5a9a8970b0f3e215e7c3483f42fc948b6e69f2ee50dd0b"
+                  },
+                  {
+                      "path":  "src/main/main.js",
+                      "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/main/main.js",
+                      "sha256":  "e3f81257cb996bca996111ab87824ebe5e0f0badb6df18f15c4337ff89aa4cd5"
+                  },
+                  {
+                      "path":  "src/main/mods.js",
+                      "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/main/mods.js",
+                      "sha256":  "6480778e6d90b9e9cadd3b358f9f52ac16976a33049e72eba02c18573a2913f3"
+                  },
+                  {
+                      "path":  "src/main/store.js",
+                      "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/main/store.js",
+                      "sha256":  "ed1e63a124855ad828ff5aa73c09d8dc906594a313a6c77f7f388b08a92a8234"
+                  },
+                  {
+                      "path":  "src/main/update.js",
+                      "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/main/update.js",
+                      "sha256":  "3fc08274a00bbfda361bc5d5219a6f5400585e4dd3cf5f110464ecf6d5596337"
+                  },
+                  {
+                      "path":  "src/preload/preload.js",
+                      "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/preload/preload.js",
+                      "sha256":  "0c36e5c29cd5ec4b0982b1044b2d9e8f69a33f6e0f99afd46cfb193631f61907"
+                  },
+                  {
+                      "path":  "src/renderer/app.js",
+                      "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/renderer/app.js",
+                      "sha256":  "ba94b97aea43ca1e0dfbc065fb7b708a2cecdf440b1df718060eff41de858908"
+                  },
+                  {
+                      "path":  "src/renderer/icon.png",
+                      "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/renderer/icon.png",
+                      "sha256":  "ab59ff872197a0f22e9214480447e68b5af02d309ca94c47b17adfc6b688d687"
+                  },
+                  {
+                      "path":  "src/renderer/icons.js",
+                      "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/renderer/icons.js",
+                      "sha256":  "a979ba1fc825a1619e1fc6bf443ecfe008b20031ad1a5e7db7638017c5f2095e"
+                  },
+                  {
+                      "path":  "src/renderer/index.html",
+                      "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/renderer/index.html",
+                      "sha256":  "70a68df681f2ffc71e73788db7942a4a5ff218f4742681356c774b17afb7e1a1"
+                  },
+                  {
+                      "path":  "src/renderer/fonts/MinecraftSeven.woff2",
+                      "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/renderer/fonts/MinecraftSeven.woff2",
+                      "sha256":  "b2840d23454bc5cef67926850733b8b29b9bdd12a6fd75857c03aed7bbd2dc5d"
+                  },
+                  {
+                      "path":  "src/renderer/fonts/MinecraftTenV2.woff2",
+                      "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/renderer/fonts/MinecraftTenV2.woff2",
+                      "sha256":  "05c57067ecb4aba78fa6db6c422657c4d87191a9854a95a07e9620b300533551"
+                  },
+                  {
+                      "path":  "package.json",
+                      "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/package.json",
+                      "sha256":  "4fee12ea49eafa20ee0747906934583718bd1d69d3a2aad47bf8cb7694bee4cd"
+                  },
+                  {
+                      "path":  "updater.js",
+                      "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/updater.js",
+                      "sha256":  "82787e878332dfd5e8639de1e374c99286df5e1fe2083f16875ca1300e6aea22"
+                  }
+              ],
+    "version":  "0.2.6"
 }

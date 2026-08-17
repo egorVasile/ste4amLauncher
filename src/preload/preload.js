@@ -24,17 +24,30 @@ const INVOKE = [
   'builds:installed',
   'builds:install-mod',
   'builds:delete-mod',
+  'builds:update-mod',
+  'diagnosis:pending',
+  'diagnosis:clear',
+  'diagnosis:relaunch',
+  'builds:export',
+  'builds:import',
   'mods:java',
   'game:open-dir',
   'shell:open-root',
-  'shell:open-mods',
-  'shell:open-url',
-  'news:fetch',
-  'favs:list',
-  'favs:add',
+  'shell:open-mods',
+
+  'shell:open-url',
+
+  'news:fetch',
+
+  'favs:list',
+
+  'favs:add',
+
   'favs:remove',
   'update:check',
-  'update:now'
+  'update:now',
+  'dialog:saveFile',
+  'dialog:openFile'
 ];
 
 const RECEIVE = [
@@ -45,7 +58,8 @@ const RECEIVE = [
   'launch:exit',
   'builds:changed',
   'mod:progress',
-  'builds:progress'
+  'builds:progress',
+  'launch:diagnosis'
 ];
 
 contextBridge.exposeInMainWorld('st4am', {

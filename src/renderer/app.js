@@ -33,48 +33,53 @@
     const im = new Image();
     im.crossOrigin = 'anonymous';
     im.onload = () => {
-      try {
-        const S = 32;
-        const c = document.createElement('canvas');
-        c.width = S; c.height = S;
-        const ctx = c.getContext('2d', { willReadFrequently: true });
-        ctx.drawImage(im, 0, 0, S, S);
-        const d = ctx.getImageData(0, 0, S, S).data;
-        const bins = {};
-        const E = 7; // толщина краевой рамки в пикселях
-        for (let y = 0; y < S; y++) {
-          for (let x = 0; x < S; x++) {
-            // берём только края и углы, центр пропускаем
-            if (x >= E && x < S - E && y >= E && y < S - E) continue;
-            const i = (y * S + x) * 4;
-            const r = d[i], g = d[i + 1], b = d[i + 2], a = d[i + 3];
-            if (a < 200) continue;
-            const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
-            const sat = mx === 0 ? 0 : (mx - mn) / mx;
-            // отбрасываем белый/серый/почти чёрный
-            if (sat < 0.25 || mx < 50 || (mx > 235 && sat < 0.35)) continue;
-            // вес: угловые пиксели важнее + насыщенность + яркость
-            const corner = (x < E || x >= S - E) && (y < E || y >= S - E) ? 1.6 : 1;
-            const h = rgbHue(r, g, b);
-            const bin = Math.round(h / 15) * 15;
-            const w = corner * sat * (mx / 255);
-            if (!bins[bin]) bins[bin] = { w: 0, r: 0, g: 0, b: 0, n: 0 };
-            bins[bin].w += w;
-            bins[bin].r += r; bins[bin].g += g; bins[bin].b += b; bins[bin].n++;
+      // Обработку канваса откладываем до простоя — не блокируем рендер списков
+      const process = () => {
+        try {
+          const S = 32;
+          const c = document.createElement('canvas');
+          c.width = S; c.height = S;
+          const ctx = c.getContext('2d', { willReadFrequently: true });
+          ctx.drawImage(im, 0, 0, S, S);
+          const d = ctx.getImageData(0, 0, S, S).data;
+          const bins = {};
+          const E = 7; // толщина краевой рамки в пикселях
+          for (let y = 0; y < S; y++) {
+            for (let x = 0; x < S; x++) {
+              // берём только края и углы, центр пропускаем
+              if (x >= E && x < S - E && y >= E && y < S - E) continue;
+              const i = (y * S + x) * 4;
+              const r = d[i], g = d[i + 1], b = d[i + 2], a = d[i + 3];
+              if (a < 200) continue;
+              const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+              const sat = mx === 0 ? 0 : (mx - mn) / mx;
+              // отбрасываем белый/серый/почти чёрный
+              if (sat < 0.25 || mx < 50 || (mx > 235 && sat < 0.35)) continue;
+              // вес: угловые пиксели важнее + насыщенность + яркость
+              const corner = (x < E || x >= S - E) && (y < E || y >= S - E) ? 1.6 : 1;
+              const h = rgbHue(r, g, b);
+              const bin = Math.round(h / 15) * 15;
+              const w = corner * sat * (mx / 255);
+              if (!bins[bin]) bins[bin] = { w: 0, r: 0, g: 0, b: 0, n: 0 };
+              bins[bin].w += w;
+              bins[bin].r += r; bins[bin].g += g; bins[bin].b += b; bins[bin].n++;
+            }
           }
-        }
-        const top = Object.values(bins).sort((a, b) => b.w - a.w).slice(0, 3).filter(x => x.n);
-        let cols = null;
-        if (top.length) {
-          cols = top.map(x => {
-            const r = Math.round(x.r / x.n), g = Math.round(x.g / x.n), b = Math.round(x.b / x.n);
-            const h = rgbHue(r, g, b);
-            return 'hsl(' + Math.round(h) + ',72%,55%)';
-          });
-        }
-        ACCENT_CACHE[src] = cols;
-        if (cols) setAccent(targetEl, cols);
-      } catch (e) { ACCENT_CACHE[src] = null; }
+          const top = Object.values(bins).sort((a, b) => b.w - a.w).slice(0, 3).filter(x => x.n);
+          let cols = null;
+          if (top.length) {
+            cols = top.map(x => {
+              const r = Math.round(x.r / x.n), g = Math.round(x.g / x.n), b = Math.round(x.b / x.n);
+              const h = rgbHue(r, g, b);
+              return 'hsl(' + Math.round(h) + ',72%,55%)';
+            });
+          }
+          ACCENT_CACHE[src] = cols;
+          if (cols) setAccent(targetEl, cols);
+        } catch (e) { ACCENT_CACHE[src] = null; }
+      };
+      if (window.requestIdleCallback) window.requestIdleCallback(process, { timeout: 2000 });
+      else setTimeout(process, 0);
     };
     im.onerror = () => { ACCENT_CACHE[src] = null; };
     im.src = src;
@@ -129,6 +134,10 @@
       const panel = $('#tab-' + btn.dataset.tab);
       if (panel) panel.classList.add('active');
       if (btn.dataset.tab === 'favs') renderFavs();
+      if (btn.dataset.tab === 'versions' && !VERSIONS_RENDERED) {
+        VERSIONS_RENDERED = true;
+        renderVersions();
+      }
       setStatus('РАЗДЕЛ: ' + btn.dataset.tab.toUpperCase(), '');
     });
   });
@@ -241,20 +250,21 @@
 
   /* ===== Реальные версии (из манифеста) ===== */
   let VERSION_LIST = [];
+  let VERSIONS_RENDERED = false;
   function versionFilter(v) {
     if (settingsCache.showOldVersions === false && (v.type === 'old_alpha' || v.type === 'old_beta')) return false;
     if (settingsCache.showSnapshots === false && (v.type === 'snapshot' || v.type === 'old_beta' || v.type === 'old_alpha')) return false;
     return true;
   }
   function buildVersionsFromManifest(list) {
-    const d = $('#versionsList');
-    if (!d) return;
     VERSION_LIST = list;
-    renderVersions();
+    // Ленивый рендер: строим сотни строк версий только при первом открытии вкладки
+    if (VERSIONS_RENDERED) renderVersions();
   }
   function renderVersions() {
     const d = $('#versionsList');
     if (!d) return;
+    VERSIONS_RENDERED = true;
     d.innerHTML = '';
     const shown = VERSION_LIST.filter(versionFilter);
     shown.forEach((v, idx) => {
@@ -723,6 +733,149 @@
     setStatus('ОБНОВЛЕНО ТОЛЬКО ЧТО', '');
   });
 
+  /* ===== Диагностика ошибок запуска ===== */
+  const DIAG_META = {
+    missing_dep:     { label: 'ОТСУТСТВУЮТ МОДЫ-ЗАВИСИМОСТИ', color: '#ca3636' },
+    conflict:        { label: 'КОНФЛИКТ МОДОВ', color: '#ca3636' },
+    duplicate:       { label: 'ДУБЛИКАТЫ МОДОВ', color: '#ca3636' },
+    version_mismatch:{ label: 'НЕ ТА ВЕРСИЯ МОДА', color: '#d8a03a' },
+    wrong_mc:        { label: 'НЕ ТА ВЕРСИЯ MINECRAFT', color: '#d8a03a' },
+    wrong_loader:    { label: 'НЕ ТА ВЕРСИЯ ЗАГРУЗЧИКА', color: '#d8a03a' },
+    oom:             { label: 'НЕ ХВАТАЕТ ПАМЯТИ', color: '#d8a03a' },
+    no_java:         { label: 'ПРОБЛЕМА С JAVA', color: '#d8a03a' },
+    assets:          { label: 'ОШИБКА РЕСУРСОВ', color: '#d8a03a' },
+    login:           { label: 'ПРОБЛЕМА С АККАУНТОМ', color: '#d8a03a' }
+  };
+  const DIAG_BTN = {
+    install: { text: '\u2795 \u0421\u041a\u0410\u0427\u0410\u0422\u042c', cls: 'play' },
+    update:  { text: '\u21bb \u041e\u0411\u041d\u041e\u0412\u0418\u0422\u042c', cls: '' },
+    remove:  { text: '\u2715 \u0423\u0414\u0410\u041b\u0418\u0422\u042c', cls: 'del' }
+  };
+
+  function diagAction(problem, m) {
+    const buildId = problem.buildId;
+    if (!buildId) return;
+    const btn = m && m._btn;
+    if (btn) { btn.disabled = true; btn.textContent = '...'; }
+    if (m.action === 'remove') {
+      api.invoke('builds:delete-mod', buildId, m.filename, 'mod').then(() => {
+        setStatus('\u041c\u041e\u0414 \u0423\u0414\u0410\u041b\u0415\u041d', '');
+        if (btn) { btn.textContent = '\u2713 \u0423\u0414\u0410\u041b\u0415\u041d'; }
+        refreshBuilds();
+      }).catch(err => {
+        if (btn) { btn.disabled = false; btn.textContent = (DIAG_BTN[m.action] || {}).text || ''; }
+        setStatus('\u041e\u0428\u0418\u0411\u041a\u0410: ' + (err && err.message || err), 'busy');
+      });
+    } else if (m.action === 'update') {
+      api.invoke('builds:update-mod', { buildId, slug: m.slug, filename: m.filename, type: 'mod' }).then(() => {
+        setStatus('\u041c\u041e\u0414 \u041e\u0411\u041d\u041e\u0412\u041b\u0415\u041d', '');
+        if (btn) { btn.textContent = '\u2713 \u041e\u0411\u041d\u041e\u0412\u041b\u0415\u041d'; }
+        refreshBuilds();
+      }).catch(err => {
+        if (btn) { btn.disabled = false; btn.textContent = (DIAG_BTN[m.action] || {}).text || ''; }
+        setStatus('\u041e\u0428\u0418\u0411\u041a\u0410: ' + (err && err.message || err), 'busy');
+      });
+    } else {
+      api.invoke('builds:install-mod', { buildId, project: m.slug, versionId: null, withDeps: false, type: 'mod' }).then(() => {
+        setStatus('\u041c\u041e\u0414 \u0423\u0421\u0422\u0410\u041d\u041e\u0412\u041b\u0415\u041d: ' + m.title, '');
+        if (btn) { btn.textContent = '\u2713 \u0423\u0421\u0422\u0410\u041d\u041e\u0412\u041b\u0415\u041d'; }
+        refreshBuilds();
+      }).catch(err => {
+        if (btn) { btn.disabled = false; btn.textContent = (DIAG_BTN[m.action] || {}).text || ''; }
+        setStatus('\u041e\u0428\u0418\u0411\u041a\u0410: ' + (err && err.message || err), 'busy');
+      });
+    }
+  }
+
+  function showDiagnostics(report) {
+    if (!report || !report.problems || !report.problems.length) return;
+    const buildId = report.buildId;
+    let html = '<div style="display:flex;flex-direction:column;gap:14px;max-height:62vh;overflow-y:auto;padding-right:4px">';
+    report.problems.forEach(p => {
+      const meta = DIAG_META[p.kind] || { label: 'ОШИБКА', color: '#ca3636' };
+      html += `
+        <div style="border:2px solid var(--mc-off-black);background:var(--mc-grey-5);padding:10px 12px;border-left:6px solid ${meta.color}">
+          <div style="font-family:var(--mc-font);font-size:13px;letter-spacing:.06em;color:${meta.color}">${meta.label}</div>
+          <div style="font-family:var(--mc-font-body);font-size:11px;color:var(--mc-grey-2);margin-top:3px;line-height:1.45">${escapeHtml(p.detail)}</div>`;
+      if (p.mods && p.mods.length) {
+        html += '<div style="display:flex;flex-direction:column;gap:6px;margin-top:9px">';
+        p.mods.forEach(m => {
+          const b = DIAG_BTN[m.action] || { text: '\u041f\u041e\u0414\u0420\u041e\u0411\u041d\u0415\u0415', cls: '' };
+          const relParts = [];
+          if (m.neededBy && m.neededBy.length) {
+            relParts.push('<span class="b-tag" style="color:var(--mc-green-2)">\u043d\u0443\u0436\u0435\u043d \u0434\u043b\u044f: ' + escapeHtml(m.neededBy.join(', ')) + '</span>');
+          }
+          if (m.conflictsWith && m.conflictsWith.length) {
+            relParts.push('<span class="b-tag" style="color:var(--mc-default-warning,#ca3636)">\u043a\u043e\u043d\u0444\u043b\u0438\u043a\u0442\u0443\u0435\u0442 \u0441: ' + escapeHtml(m.conflictsWith.join(', ')) + '</span>');
+          }
+          if (m.needVersion) {
+            relParts.push('<span class="b-tag" style="color:#4db8ff">\u043d\u0443\u0436\u043d\u0430 \u0432\u0435\u0440\u0441\u0438\u044f: ' + escapeHtml(m.needVersion) + '</span>');
+          }
+          html += `
+            <div class="b-hit" data-slug="${escapeHtml(m.slug)}" style="cursor:pointer">
+              <img src="${m.icon_url || modThumb(m.slug + '.jar')}" alt="" style="width:36px;height:36px;object-fit:contain;background:var(--mc-grey-6);border:2px solid var(--mc-off-black);flex-shrink:0"/>
+              <div class="bh-body" style="min-width:0">
+                <div class="bh-name" style="font-size:12px">${escapeHtml(m.title)}</div>
+                <div class="bh-meta" style="flex-wrap:wrap">${relParts.join('')}</div>
+              </div>
+              <button class="b-mini ${b.cls}" style="flex:0 0 auto;padding:6px 10px;font-size:11px">${b.text}</button>
+            </div>`;
+        });
+        html += '</div>';
+      }
+      html += '</div>';
+    });
+    html += '</div>';
+    if (buildId) {
+      html += `
+        <button class="play-btn" id="diagRelaunch" style="margin-top:14px;width:100%">&#9654; \u0417\u0410\u041f\u0423\u0421\u0422\u0418\u0422\u042c \u0418\u0413\u0420\u0423 \u0421\u041d\u041e\u0412\u0410</button>`;
+    }
+    if (report.problems.some(p => p.kind === 'oom')) {
+      html += `<button class="secondary-btn" id="diagRam" style="margin-top:8px;width:100%">\u041e\u0422\u041a\u0420\u042b\u0422\u042c \u041d\u0410\u0421\u0422\u0420\u041e\u0419\u041a\u0418 RAM</button>`;
+    }
+    html += `<button class="secondary-btn" id="diagClose" style="margin-top:8px;width:100%">\u0417\u0410\u041a\u0420\u042b\u0422\u042c</button>`;
+    openModal('\u041f\u0420\u041e\u0411\u041b\u0415\u041c\u0410 \u041f\u0420\u0418 \u0417\u0410\u041f\u0423\u0421\u041a\u0415', html, true);
+    const mb = modal.querySelector('.modal');
+    if (mb) mb.classList.add('wide');
+    // клик по карточке → страница мода (с подсветкой нужной версии при несовпадении)
+    $$('.b-hit[data-slug]').forEach(card => {
+      const slug = card.dataset.slug;
+      const findMod = () => report.problems
+        .flatMap(x => (x.mods || []).map(mm => Object.assign({}, mm)))
+        .find(mm => mm.slug === slug);
+      card.addEventListener('click', (e) => {
+        if (e.target.closest('button')) return;
+        const m = findMod() || {};
+        openModPage({ slug, title: card.querySelector('.bh-name') ? card.querySelector('.bh-name').textContent : slug, icon_url: card.querySelector('img') ? card.querySelector('img').src : '', description: '', downloads: 0, categories: [] }, m.needVersion ? { needVersion: m.needVersion } : null);
+      });
+      const btn = card.querySelector('button');
+      if (btn) {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const m = findMod();
+          if (m) diagAction(report, m);
+        });
+      }
+    });
+    const rc = $('#diagRelaunch');
+    if (rc) rc.addEventListener('click', () => {
+      modal.classList.remove('show');
+      api.invoke('diagnosis:relaunch', { buildId, username: settingsCache.username, ram: settingsCache.ram }).catch(() => {});
+      setStatus('\u041f\u0415\u0420\u0415\u0417\u0410\u041f\u0423\u0421\u041a...', 'busy');
+    });
+    const rr = $('#diagRam');
+    if (rr) rr.addEventListener('click', () => {
+      modal.classList.remove('show');
+      const s = $('.nav-item[data-tab="settings"]');
+      if (s) s.click();
+    });
+    $('#diagClose').addEventListener('click', () => {
+      modal.classList.remove('show');
+      api.invoke('diagnosis:clear').catch(() => {});
+    });
+  }
+  api.on('launch:diagnosis', (report) => showDiagnostics(report));
+
   /* ===== Сборки (экспериментально) ===== */
   const buildsNav = $('#buildsNav');
   const buildsNavIcon = $('#buildsNavIcon');
@@ -802,12 +955,77 @@
     });
   }
 
+  async function handleExport() {
+    if (!CURRENT_BUILD) {
+      mcToast('СНАЧАЛА ВЫБЕРИТЕ СБОРКУ');
+      return;
+    }
+    const res = await api.invoke('builds:export', CURRENT_BUILD.id);
+    if (res.canceled) return;
+    if (!res.ok) {
+      openModal('Ошибка экспорта', `
+        <div style="color:var(--mc-default-warning,#ca3636);font-family:var(--mc-font-body);font-size:11px">${escapeHtml(res.error || 'Неизвестная ошибка')}</div>
+        <button class="secondary-btn" style="margin-top:10px;width:100%" onclick="mcModalClose()">ОК</button>
+      `);
+      return;
+    }
+    if (res.skipped && res.skipped.length) {
+      openModal('Экспорт завершён', `
+        <div style="font-family:var(--mc-font-body);font-size:11px;color:var(--mc-grey-2);line-height:1.5">
+          Файл: ${escapeHtml(res.path)}<br>
+          <span style="color:var(--mc-default-warning,#ca3636)">Пропущено модов (не найдены на Modrinth): ${res.skipped.length}</span><br>
+          ${res.skipped.map(s => '&#8226; ' + escapeHtml(s)).join('<br>')}
+        </div>
+        <button class="secondary-btn" style="margin-top:10px;width:100%" onclick="mcModalClose()">ПОНЯТНО</button>
+      `);
+    } else {
+      mcToast('ЭКСПОРТ УСПЕШЕН: ' + res.path);
+    }
+  }
+
+  async function handleImport() {
+    const filePath = await api.invoke('dialog:openFile');
+    if (!filePath) return;
+    openModal('Импорт сборки', `
+      <div class="upd-box">
+        <div class="upd-text">Подготовка...</div>
+        <div class="lp-bar"><div class="fill" id="impFill"></div></div>
+        <div id="impStage" style="font-family:var(--mc-font);font-size:10px;color:var(--mc-grey-3);margin-top:6px"></div>
+      </div>
+    `, true);
+    const off = api.on('builds:progress', d => {
+      const fill = $('#impFill');
+      const stage = $('#impStage');
+      if (fill) fill.style.width = Math.round(d.frac * 100) + '%';
+      if (stage) stage.textContent = d.file || '';
+    });
+    const res = await api.invoke('builds:import', filePath);
+    off();
+    if (res.ok) {
+      mcToast('СБОРКА ИМПОРТИРОВАНА: ' + res.buildId);
+      refreshBuilds();
+      setTimeout(() => modal && modal.classList.remove('show'), 500);
+    } else {
+      openModal('Ошибка импорта', `
+        <div style="color:var(--mc-default-warning,#ca3636);font-family:var(--mc-font-body);font-size:11px">${escapeHtml(res.error || 'Неизвестная ошибка')}</div>
+        <button class="secondary-btn" style="margin-top:10px;width:100%" onclick="mcModalClose()">ОК</button>
+      `);
+    }
+  }
+
   function renderDetailBuild() {
     const box = $('#bDetail');
     if (!box) return;
     const b = CURRENT_BUILD;
     if (!b) {
-      box.innerHTML = '<div class="b-empty">Выберите сборку слева</div>';
+      box.innerHTML = `
+        <div class="b-empty">Выберите сборку слева</div>
+        <div class="bd-btns">
+          <button class="b-mini" id="bdExport" title="Экспорт активной сборки">&#128463; ЭКСПОРТ</button>
+          <button class="b-mini" id="bdImport">&#128462; ИМПОРТ</button>
+        </div>`;
+      $('#bdExport').addEventListener('click', handleExport);
+      $('#bdImport').addEventListener('click', handleImport);
       return;
     }
     box.innerHTML = `
@@ -824,11 +1042,15 @@
       </div>
       <div class="bd-btns">
         <button class="b-mini play" id="bdPlay">&#9654; ИГРАТЬ</button>
+        <button class="b-mini" id="bdExport">&#128463; ЭКСПОРТ</button>
+        <button class="b-mini" id="bdImport">&#128462; ИМПОРТ</button>
         <button class="b-mini del" id="bdDel">&#10005; УДАЛИТЬ</button>
       </div>`;
     const bdImg = box.querySelector('.bd-head img');
     if (bdImg) applyEdgeAccent(bdImg, box.querySelector('.bd-head'));
     $('#bdPlay').addEventListener('click', () => launchBuild(b));
+    $('#bdExport').addEventListener('click', handleExport);
+    $('#bdImport').addEventListener('click', handleImport);
     $('#bdDel').addEventListener('click', () => {
       api.invoke('builds:delete', b.id).then(() => {
         if (CURRENT_BUILD && CURRENT_BUILD.id === b.id) CURRENT_BUILD = null;
@@ -1134,7 +1356,29 @@
     if (!any) box.innerHTML = '<div class="b-empty">\u041f\u043e\u043a\u0430 \u043f\u0443\u0441\u0442\u043e \u2014 \u0434\u043e\u0431\u0430\u0432\u043b\u044f\u0439\u0442\u0435 \u043c\u043e\u0434\u044b \u0432 \u0438\u0437\u0431\u0440\u0430\u043d\u043d\u043e\u0435 \u0444\u043b\u0430\u0436\u043a\u043e\u043c</div>';
   }
 
-  function openModPage(h) {
+  /* ---- Сравнение версий для подсветки нужной из диагноза ---- */
+  function cmpVer(a, b) {
+    const pa = String(a).split(/[.\-]/).map(n => parseInt(n, 10) || 0);
+    const pb = String(b).split(/[.\-]/).map(n => parseInt(n, 10) || 0);
+    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+      const x = pa[i] || 0, y = pb[i] || 0;
+      if (x !== y) return x < y ? -1 : 1;
+    }
+    return 0;
+  }
+  function versionMatchesRange(version, range) {
+    const r0 = String(range || '').replace(/[[\])]/g, '').trim();
+    const commaIndex = r0.indexOf(',');
+    if (commaIndex === -1) return cmpVer(version, r0) === 0; // точная версия
+    const lower = r0.slice(0, commaIndex).trim();
+    const upper = r0.slice(commaIndex + 1).trim();
+    let ok = true;
+    if (lower) ok = ok && cmpVer(version, lower) >= 0; // [a, ...)
+    if (upper) ok = ok && cmpVer(version, upper) < 0;  // ..., b)
+    return ok;
+  }
+
+  function openModPage(h, hl) {
     const fam = isFav(h.slug);
     openModal(escapeHtml(h.title), `
       <div class="mp-head">
@@ -1224,11 +1468,13 @@
         const date = fmtDate(v.date_published);
         const type = v.version_type ? (v.version_type.charAt(0).toUpperCase() + v.version_type.slice(1)) : '';
         const gvs = (v.game_versions || []).slice(0, 3).join(', ') + ((v.game_versions || []).length > 3 ? '...' : '');
+        // подсветка версии, нужной по диагнозу
+        const matches = hl && hl.needVersion && versionMatchesRange(v.version_number, hl.needVersion);
         const row = document.createElement('div');
-        row.className = 'b-mod b-ver-row';
+        row.className = 'b-mod b-ver-row' + (matches ? ' hl' : '');
         row.innerHTML = `
           <div style="display:flex;flex-direction:column;gap:3px;min-width:0">
-            <div class="bm-name">${escapeHtml(gvs)} &middot; ${escapeHtml((v.loaders || []).join('/'))}</div>
+            <div class="bm-name">${escapeHtml(gvs)} &middot; ${escapeHtml((v.loaders || []).join('/'))} ${matches ? '<span class="b-tag" style="color:#4db8ff">\u2713 \u041d\u0443\u0436\u043d\u0430\u044f</span>' : ''}</div>
             <div class="bm-meta">${type ? escapeHtml(type) + ' &middot; ' : ''}${date}${mb ? ' &middot; ' + mb : ''}</div>
           </div>
           <div style="display:flex;flex-direction:column;gap:4px;margin-top:2px">
@@ -1371,14 +1617,18 @@
   function setupPanoParallax() {
     const pv = document.getElementById('versionPreview');
     if (!pv) return;
-    let ox = 0, oy = 0, drift = 0, last = performance.now();
-    function frame(now) {
-      const dt = Math.min((now - last) / 1000, .1);
-      last = now;
-      drift += 8 * dt;
-      pv.style.backgroundPositionX = (-(drift % 256) + ox).toFixed(2) + 'px';
-      pv.style.backgroundPositionY = oy.toFixed(2) + 'px';
-      requestAnimationFrame(frame);
+    let ox = 0, oy = 0, drift = 0, last = performance.now(), timer = 0;
+    function tick() {
+      // пауза, когда окно скрыто/свёрнуто или вкладка не активна — CPU в фоне ~0
+      if (!document.hidden && pv.offsetParent !== null) {
+        const now = performance.now();
+        const dt = Math.min((now - last) / 1000, .1);
+        last = now;
+        drift += 8 * dt;
+        pv.style.backgroundPositionX = (-(drift % 256) + ox).toFixed(2) + 'px';
+        pv.style.backgroundPositionY = oy.toFixed(2) + 'px';
+      }
+      timer = setTimeout(tick, 100); // 10 Гц — медленный дрифт, глазу не отличить от 60fps
     }
     pv.addEventListener('mousemove', e => {
       const r = pv.getBoundingClientRect();
@@ -1388,10 +1638,14 @@
       oy = dy * -16;
     });
     pv.addEventListener('mouseleave', () => { ox = 0; oy = 0; });
-    requestAnimationFrame(frame);
+    timer = setTimeout(tick, 100);
   }
 
   function init() {
+    // Окно скрыто/свернуто → пауза всем CSS-анимациям (экономия CPU в фоне)
+    const togglePaused = () => document.documentElement.classList.toggle('anim-paused', document.hidden);
+    document.addEventListener('visibilitychange', togglePaused);
+    togglePaused();
     setupPanoParallax();
     buildMods();
     api.invoke('settings:get').then(s => {
@@ -1410,6 +1664,8 @@
     api.invoke('update:check').then(u => { if (u && u.version) showUpdateModal(u); });
     setTimeout(() => { if (!BUILD_LIST.length) refreshCatalog(); }, 1500);
 api.invoke('favs:list').then(f => { FAVS = Array.isArray(f) ? f : []; applyFavsToCards(); }).catch(() => {});
+    // Если после прошлого краша остался необработанный диагноз — напомним
+    api.invoke('diagnosis:pending').then(r => { if (r) setTimeout(() => showDiagnostics(r), 1200); }).catch(() => {});
     api.invoke('versions:list').then(list => {
       if (Array.isArray(list) && list.length) {
         VERSION_LIST = list;

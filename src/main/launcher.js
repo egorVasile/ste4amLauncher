@@ -912,12 +912,31 @@ async function launchVersion(opts, onEvent) {
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: false
   });
-  currentProcess.stdout.on('data', (c) => emit('log', { line: c.toString().trimEnd() }));
-  currentProcess.stderr.on('data', (c) => emit('log', { line: c.toString().trimEnd() }));
+  // Буфер вывода для анализа ошибок после падения
+  let outBuf = '';
+  const BUF_MAX = 200000;
+  const onOut = (c) => {
+    const s = c.toString();
+    outBuf = (outBuf + s).slice(-BUF_MAX);
+    emit('log', { line: s.trimEnd() });
+  };
+  currentProcess.stdout.on('data', onOut);
+  currentProcess.stderr.on('data', onOut);
   currentProcess.on('close', (code) => {
     emit('log', { line: '> Процесс завершён (код ' + code + ')' });
     emit('exit', { code });
     currentProcess = null;
+    // При падении с ошибкой — автоматический анализ (мод-ошибки, OOM, Java и т.д.)
+    if (code !== 0) {
+      try {
+        const diag = require('./diag');
+        diag.analyze({ buildId: opts.buildId, gameDir, logBuffer: outBuf })
+          .then(report => {
+            if (report && report.problems && report.problems.length) emit('diagnosis', report);
+          })
+          .catch(e => log('diagnosis error', e && e.message));
+      } catch (e) { log('diag require error', e && e.message); }
+    }
   });
   emit('started', { pid: currentProcess.pid });
   return currentProcess.pid;

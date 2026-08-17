@@ -5,6 +5,7 @@ const path = require('path');
 const https = require('https');
 const http = require('http');
 const crypto = require('crypto');
+const zlib = require('zlib');
 const { spawn } = require('child_process');
 const { app } = require('electron');
 const store = require('./store');
@@ -808,6 +809,8 @@ async function installProject({ buildId, project, versionId, withDeps, type = 'm
     await downloadFile(f.url, dest, fr => onProgress && onProgress(fr));
     installed.push({ projectId: item.projectId, filename: f.filename, size: f.size });
   }
+  // Сохраняем название (slug) проекта в реестр сборки — при экспорте берём отсюда
+  await recordInstalled(buildId, type, installed);
   return { installed, count: queue.length };
 }
 
@@ -815,6 +818,7 @@ async function deleteMod(buildId, filename, type) {
   const dir = (type && type !== 'mod') ? packsDir(buildId, type) : modsDir(buildId);
   const p = path.join(dir, path.basename(filename));
   try { await fsp.unlink(p); } catch (e) {}
+  await removeInstalled(buildId, path.basename(filename), type);
   return true;
 }
 
@@ -825,6 +829,472 @@ async function deleteBuild(buildId) {
   await fsp.rm(buildDir(buildId), { recursive: true, force: true }).catch(() => {});
   await fsp.rm(path.join(ROOT, 'versions', buildId), { recursive: true, force: true }).catch(() => {});
   return true;
+}
+
+/* ============ Экспорт / Импорт сборки (.st4am) ============ */
+
+async function sha256File(filePath) {
+  const hash = crypto.createHash('sha256');
+  const data = await fsp.readFile(filePath);
+  hash.update(data);
+  return hash.digest('hex');
+}
+
+async function findModrinthByHash(sha256) {
+  const url = `https://api.modrinth.com/v2/version_file/${sha256}`;
+  try {
+    const res = await httpGet(url);
+    return JSON.parse(res);
+  } catch (e) {
+    return null;
+  }
+}
+
+/* --- Поиск мода по НАЗВАНИЮ (не по файлу/хэшу) --- */
+
+// Достаёт из JAR метаданные мода (fabric.mod.json / META-INF/mods.toml / mcmod.info)
+function readJarEntry(filePath, targetName) {
+  try {
+    const buf = fs.readFileSync(filePath);
+    // ищем End of Central Directory
+    let eocd = -1;
+    for (let i = buf.length - 22; i >= 0; i--) {
+      if (buf[i] === 0x50 && buf[i + 1] === 0x4b && buf[i + 2] === 0x05 && buf[i + 3] === 0x06) { eocd = i; break; }
+    }
+    if (eocd < 0) return null;
+    const cdCount = buf.readUInt16LE(eocd + 10);
+    const cdOffset = buf.readUInt32LE(eocd + 16);
+    let off = cdOffset;
+    for (let n = 0; n < cdCount; n++) {
+      if (buf.readUInt32LE(off) !== 0x02014b50) break; // центральный заголовок
+      const method = buf.readUInt16LE(off + 10);
+      const csize = buf.readUInt32LE(off + 20);
+      const fnameLen = buf.readUInt16LE(off + 28);
+      const extraLen = buf.readUInt16LE(off + 30);
+      const commentLen = buf.readUInt16LE(off + 32);
+      const localOff = buf.readUInt32LE(off + 42);
+      const fname = buf.toString('utf8', off + 46, off + 46 + fnameLen);
+      if (fname === targetName) {
+        const lNameLen = buf.readUInt16LE(localOff + 26);
+        const lExtraLen = buf.readUInt16LE(localOff + 28);
+        const dataStart = localOff + 30 + lNameLen + lExtraLen;
+        const comp = buf.subarray(dataStart, dataStart + csize);
+        if (method === 0) return comp;                 // stored
+        if (method === 8) return zlib.inflateRawSync(comp); // deflate
+        return null;
+      }
+      off += 46 + fnameLen + extraLen + commentLen;
+    }
+    return null;
+  } catch (e) { return null; }
+}
+
+function modIdFromJar(filePath) {
+  try {
+    const fab = readJarEntry(filePath, 'fabric.mod.json');
+    if (fab) {
+      const j = JSON.parse(fab.toString('utf8'));
+      return String(j.id || j.name || '').trim() || null;
+    }
+  } catch (e) {}
+  try {
+    const toml = readJarEntry(filePath, 'META-INF/mods.toml');
+    if (toml) {
+      const t = toml.toString('utf8');
+      const m = /modId\s*=\s*"([^"]+)"/.exec(t);
+      if (m) return m[1].trim();
+    }
+  } catch (e) {}
+  try {
+    const info = readJarEntry(filePath, 'mcmod.info');
+    if (info) {
+      const j = JSON.parse(info.toString('utf8'));
+      const first = Array.isArray(j) ? j[0] : j;
+      if (first && (first.modid || first.name)) return String(first.modid || first.name).trim();
+    }
+  } catch (e) {}
+  return null;
+}
+
+// Достаёт настоящее название пакa из его внутренних метаданных (.zip)
+// resourcepacks / datapacks -> pack.mcmeta -> description
+// shaders -> shaders/shaders.txt (OptiFine #N# ...) , Iris manifest
+function packNameFromZip(filePath) {
+  function tryParsePackMeta(buf) {
+    try {
+      const j = JSON.parse(buf.toString('utf8'));
+      const p = j && j.pack;
+      if (!p) return null;
+      let d = p.description;
+      if (typeof d === 'string') d = d.trim();
+      else if (typeof d === 'object' && d) {
+        const txt = d.text || d.fallback || '';
+        if (typeof txt === 'string' && txt.trim()) d = txt.trim();
+        else d = null;
+      }
+      return d || null;
+    } catch (e) { return null; }
+  }
+  const metaBuf = readJarEntry(filePath, 'pack.mcmeta');
+  if (metaBuf) {
+    const name = tryParsePackMeta(metaBuf);
+    if (name) return name;
+  }
+  const st = readJarEntry(filePath, 'shaders/shaders.txt');
+  if (st) {
+    const lines = st.toString('utf8').split(/\r?\n/);
+    const nline = lines.find(l => /^#N# /.test(l));
+    if (nline) {
+      const name = nline.replace(/^#N# /, '').trim();
+      if (name) return name;
+    }
+  }
+  const irr = readJarEntry(filePath, 'shaders/Iris/manifest.json');
+  if (irr) {
+    try {
+      const j = JSON.parse(irr.toString('utf8'));
+      if (j && typeof j.name === 'string' && j.name.trim()) return j.name.trim();
+    } catch (e) {}
+  }
+  const meta2 = readJarEntry(filePath, 'META-INF/natives.json');
+  if (meta2) {
+    try {
+      const j = JSON.parse(meta2.toString('utf8'));
+      if (j.shader && typeof j.shader === 'string' && j.shader.trim()) return j.shader.trim();
+    } catch (e) {}
+  }
+  return null;
+}
+
+// Чистит имя файла от версии/суффиксов → получаем название проекта для поиска
+// Примеры: "sodium-fabric-0.5.11.jar" → "sodium" ; "Fresh Animations.zip" → "Fresh Animations"
+function cleanProjectName(raw) {
+  let s = String(raw || '');
+  s = s.replace(/\.(jar|zip)$/i, '');                     // убрать расширение
+  s = s.replace(/[-_.](?:v?\d+(?:\.\d+){1,3}(?:[-_.][a-z0-9]+)*)$/i, ''); // хвост-версия
+  s = s.replace(/[-_.]mc[-_.]\d+(?:\.\d+)+/i, '');        // -mc1.20.1 / _mc1_20_1
+  s = s.replace(/[-_.](fabric|forge|neoforge|quilt|iris|optifine|fapi|fabric-api)$/i, '');
+  s = s.replace(/[-_]+/g, ' ').trim();
+  return s;
+}
+
+// Ищет проект на Modrinth по названию/id мода (fallback к поиску по имени)
+async function findModrinthByName(name, type) {
+  if (!name) return null;
+  const variants = [];
+  // варианты slug: точное, без пробелов, с подчёркиваниями, lower-case
+  const base = String(name).trim();
+  variants.push(base);
+  if (/ /.test(base)) {
+    variants.push(base.replace(/ /g, '-'));
+    variants.push(base.replace(/ /g, '_'));
+  }
+  if (/[A-Z]/.test(base)) variants.push(base.toLowerCase());
+  if (/[-_]/.test(base)) variants.push(base.replace(/[-_]+/g, ' '));
+
+  for (const v of variants) {
+    try {
+      const p = await mrProject(v);
+      if (p && p.slug) return { slug: p.slug };
+    } catch (e) {}
+  }
+
+  // поиск по названию; для ресурспаков предпочтительнее проекты типа resource_pack
+  try {
+    const r = await mrSearch({ query: base, facets: [], limit: 5, offset: 0 });
+    const hits = r && r.hits;
+    if (hits && hits.length) {
+      const exact = hits.find(h => h.slug === base || h.project_id === base);
+      if (exact) return { slug: exact.slug };
+      if (type === 'resourcepack') {
+        const rp = hits.find(h => (h.project_type || '').toLowerCase() === 'resource_pack');
+        if (rp) return { slug: rp.slug };
+      }
+      return { slug: hits[0].slug };
+    }
+  } catch (e) {}
+
+  return null;
+}
+
+async function packConfigs(buildId) {
+  const bdir = buildDir(buildId);
+  const gameDir = path.join(bdir, 'game');
+  const entries = [];
+  const configPaths = [
+    { src: path.join(gameDir, 'config'), prefix: 'config/' },
+    { src: path.join(gameDir, 'options.txt'), prefix: 'options.txt' },
+    { src: path.join(gameDir, 'keybinds.txt'), prefix: 'keybinds.txt' }
+  ];
+  for (const cp of configPaths) {
+    try {
+      const stat = await fsp.stat(cp.src);
+      if (stat.isDirectory()) {
+        const files = await fsp.readdir(cp.src, { recursive: true });
+        for (const f of files) {
+          const fpath = path.join(cp.src, f);
+          const fstat = await fsp.stat(fpath);
+          if (fstat.isFile()) {
+            const data = await fsp.readFile(fpath);
+            entries.push({ name: cp.prefix + f, data });
+          }
+        }
+      } else if (stat.isFile()) {
+        const data = await fsp.readFile(cp.src);
+        entries.push({ name: cp.prefix, data });
+      }
+    } catch (e) {}
+  }
+  if (!entries.length) return '';
+  // Minimal ustar tar
+  const blocks = [];
+  for (const e of entries) {
+    const name = e.name;
+    const data = e.data;
+    const size = data.length;
+    const header = Buffer.alloc(512);
+    Buffer.from(name).copy(header, 0, 0, Math.min(100, name.length));
+    header.writeUInt32octal(size, 124, 11);
+    header[156] = 48; // ustar typeflag '0'
+    'ustar  \0'.split('').forEach((c, i) => header[257 + i] = c.charCodeAt(0));
+    const pad = (512 - (size % 512)) % 512;
+    blocks.push(header, data, Buffer.alloc(pad));
+  }
+  blocks.push(Buffer.alloc(1024)); // end of archive
+  const tar = Buffer.concat(blocks);
+  const gz = zlib.gzipSync(tar);
+  return gz.toString('base64');
+}
+
+async function unpackConfigs(buildId, base64gz) {
+  if (!base64gz) return;
+  const bdir = buildDir(buildId);
+  const gameDir = path.join(bdir, 'game');
+  await fsp.mkdir(gameDir, { recursive: true });
+  const gz = Buffer.from(base64gz, 'base64');
+  const tar = zlib.gunzipSync(gz);
+  let offset = 0;
+  while (offset < tar.length) {
+    if (offset + 512 > tar.length) break;
+    const header = tar.subarray(offset, offset + 512);
+    const name = header.subarray(0, 100).toString('utf8').replace(/\0.*$/, '');
+    if (!name) break;
+    const sizeStr = header.subarray(124, 136).toString('utf8').trim();
+    const size = parseInt(sizeStr, 8) || 0;
+    offset += 512;
+    const data = tar.subarray(offset, offset + size);
+    offset += size;
+    const pad = (512 - (size % 512)) % 512;
+    offset += pad;
+    const dest = path.join(gameDir, name);
+    await fsp.mkdir(path.dirname(dest), { recursive: true });
+    await fsp.writeFile(dest, data);
+  }
+}
+
+// ============ Реестр установленного (для экспорта по названию) ============
+// При скачивании мода/пакa запоминаем НАЗВАНИЕ (slug проекта) в per-build файл.
+// Экспорт берёт название отсюда — оно гарантированно существует на Modrinth.
+function installedFile(id) { return path.join(buildDir(id), 'installed.json'); }
+
+async function loadInstalled(id) {
+  try { return JSON.parse(await fsp.readFile(installedFile(id), 'utf8')); } catch (e) { return { files: [] }; }
+}
+
+async function saveInstalled(id, reg) {
+  try { await fsp.writeFile(installedFile(id), JSON.stringify(reg, null, 2)); } catch (e) {}
+}
+
+async function recordInstalled(buildId, type, installed) {
+  try {
+    const reg = await loadInstalled(buildId);
+    for (const item of installed) {
+      const slug = item.projectId;
+      if (!slug) continue;
+      // заменяем запись с тем же типом и slug (идемпотентно)
+      reg.files = reg.files.filter(x => !(x.type === type && x.slug === slug));
+      reg.files.push({ type, slug, filename: item.filename });
+    }
+    await saveInstalled(buildId, reg);
+  } catch (e) {}
+}
+
+async function removeInstalled(buildId, filename, type) {
+  try {
+    const reg = await loadInstalled(buildId);
+    reg.files = reg.files.filter(x => !(x.type === type && x.filename === filename));
+    await saveInstalled(buildId, reg);
+  } catch (e) {}
+}
+
+async function exportBuild(buildId) {
+  const builds = await loadBuilds();
+  const build = builds.find(b => b.id === buildId);
+  if (!build) throw new Error('Сборка не найдена');
+
+  const bdir = buildDir(buildId);
+  const gameDir = path.join(bdir, 'game');
+  const typeDirs = {
+    mod: path.join(gameDir, 'mods'),
+    resourcepack: path.join(gameDir, 'resourcepacks'),
+    shaderpack: path.join(gameDir, 'shaderpacks'),
+    datapack: path.join(gameDir, 'datapacks')
+  };
+
+  const files = [];
+  const skipped = [];
+
+  // Реестр установленного: название (slug) каждого мода/пакa, сохранённое
+  // при скачивании. Это ПРИОРИТЕТНЫЙ источник — файл точно есть на Modrinth.
+  const registry = await loadInstalled(buildId);
+  const regByKey = new Map();
+  for (const r of registry.files || []) {
+    regByKey.set(r.type + '|' + r.filename, r.slug);
+  }
+
+  for (const [type, dir] of Object.entries(typeDirs)) {
+    try {
+      const entries = await fsp.readdir(dir, { withFileTypes: true });
+      for (const e of entries) {
+        if (!e.isFile()) continue;
+        const ext = path.extname(e.name).toLowerCase();
+        if (!['.jar', '.zip'].includes(ext)) continue;
+        const fpath = path.join(dir, e.name);
+
+        // 1) ПРИОРИТЕТ: название из реестра (запомнено при скачивании)
+        let slug = regByKey.get(type + '|' + e.name) || null;
+
+        // 2) Файлы вне реестра (добавлены вручную) — старый путь: хэш/название
+        if (!slug) {
+          const sha = await sha256File(fpath);
+          if (type === 'mod') {
+            const mrf = await findModrinthByHash(sha);
+            if (mrf && mrf.project_id) slug = mrf.project_id;
+          }
+        }
+
+        if (!slug) {
+          // Читаем идентичность из метаданных файла, затем ищем по названию
+          const internalName = type === 'mod' ? modIdFromJar(fpath) : packNameFromZip(fpath);
+          const nameCandidates = [];
+          if (internalName) nameCandidates.push(internalName);
+          nameCandidates.push(cleanProjectName(e.name));
+          nameCandidates.push(path.basename(e.name, path.extname(e.name)));
+
+          const seen = new Set();
+          const unique = [];
+          for (const n of nameCandidates) {
+            if (n && !seen.has(n.toLowerCase())) { seen.add(n.toLowerCase()); unique.push(n); }
+          }
+          for (const name of unique) {
+            const byName = await findModrinthByName(name, type);
+            if (byName) { slug = byName.slug; break; }
+          }
+        }
+
+        if (slug) {
+          // Запоминаем НАЗВАНИЕ (slug проекта), а не файл/версию.
+          // versionId намеренно НЕ сохраняем: при импорте ищется по имени
+          // и Modrinth сам подберёт версию под целевую сборку.
+          files.push({
+            type,
+            slug,
+            filename: e.name
+          });
+          // Пишем название обратно в реестр, если его там ещё не было —
+          // чтобы следующий экспорт брал его из реестра мгновенно.
+          if (!regByKey.has(type + '|' + e.name)) {
+            await recordInstalled(buildId, type, [{ projectId: slug, filename: e.name }]);
+            regByKey.set(type + '|' + e.name, slug);
+          }
+        } else {
+          skipped.push(e.name);
+        }
+      }
+    } catch (e) {}
+  }
+
+  const configArchive = await packConfigs(buildId);
+
+  const manifest = {
+    formatVersion: 1,
+    name: build.name,
+    gameVersion: build.gameVersion,
+    loader: build.loader,
+    icon: build.icon || 'Grass.png',
+    files,
+    configArchive
+  };
+
+  // safety check
+  const json = JSON.stringify(manifest, null, 2);
+  console.log('[exportBuild]', buildId, manifest.name, files.length + ' файлов, пропущено:', skipped.length, 'конфиг:', !!configArchive);
+
+  return { ok: true, manifest, skipped };
+}
+
+async function importBuild(manifest, onProgress) {
+  console.log('[importBuild] вызов, formatVersion:', manifest && manifest.formatVersion, 'name:', manifest && manifest.name);
+  if (!manifest || manifest.formatVersion !== 1) throw new Error('Неверный формат файла: formatVersion=' + (manifest && manifest.formatVersion));
+  if (!manifest.name || !manifest.gameVersion || !manifest.loader || !Array.isArray(manifest.files)) {
+    throw new Error('Некорректный манифест: name=' + manifest.name + ', gameVersion=' + manifest.gameVersion + ', loader=' + manifest.loader + ', files=' + (manifest && manifest.files));
+  }
+
+  // Create build (similar to buildCreate but without onProgress for loader)
+  const builds = await loadBuilds();
+  const id = 'build-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6);
+  const b = {
+    id,
+    name: String(manifest.name || '').trim() || 'Импортированная сборка',
+    gameVersion: manifest.gameVersion,
+    loader: manifest.loader,
+    icon: manifest.icon || 'Grass.png',
+    created: Date.now()
+  };
+  console.log('[importBuild] создание сборки:', id, b.name, b.gameVersion, b.loader);
+  const bdir = buildDir(id);
+
+  // создаём папку
+  await fsp.mkdir(path.join(bdir, 'game', 'mods'), { recursive: true });
+  await fsp.mkdir(path.join(bdir, 'game', 'resourcepacks'), { recursive: true });
+  await fsp.mkdir(path.join(bdir, 'game', 'shaderpacks'), { recursive: true });
+  await fsp.mkdir(path.join(bdir, 'game', 'datapacks'), { recursive: true });
+  await fsp.mkdir(path.join(bdir, 'game'), { recursive: true });
+
+  // Install loader
+  await installLoader(b, manifest.gameVersion, manifest.loader, null);
+
+  builds.unshift(b);
+  await saveBuilds(builds);
+
+  // Download files
+  const total = manifest.files.length;
+  let done = 0;
+  for (const f of manifest.files) {
+    done++;
+    if (onProgress) onProgress(done / total, f.filename);
+    try {
+      // Ищем мод по НАЗВАНИЮ (f.slug = имя проекта), а не по файлу/версии.
+      // versionId не передаём — Modrinth сам подберёт версию под эту сборку (gameVersion + loader).
+      await installProject({
+        buildId: id,
+        project: f.slug,
+        versionId: null,
+        withDeps: false,
+        type: f.type,
+        onProgress: null
+      });
+    } catch (e) {
+      log('import file error', f.slug, f.filename, e.message);
+    }
+  }
+
+  // Unpack configs
+  if (manifest.configArchive) {
+    await unpackConfigs(id, manifest.configArchive);
+  }
+
+  return id;
 }
 
 const NEWS_API = 'https://launchercontent.mojang.com/v2/news.json';
@@ -902,6 +1372,7 @@ module.exports = {
   mrSearch, mrProject, mrProjectVersions, mrVersion, mrCategories, mrLoaders, mrGameVersions,
   mrBatchProjects, mrBatchVersions,
   buildsList, buildCreate, deleteBuild, installedMods, installProject, deleteMod,
+  exportBuild, importBuild, findModrinthByHash, packConfigs, unpackConfigs,
   findJava, findJavaMajor, javaCandidates, javaMajor, ensureJavaRuntime,
   modsDir, packsDir, buildDir, loadBuilds,
   fetchNews, favsList, favsAdd, favsRemove
