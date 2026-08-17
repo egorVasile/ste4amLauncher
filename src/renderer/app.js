@@ -749,7 +749,7 @@
       }
       renderBuilds();
       renderDetailBuild();
-      if (!CURRENT_BUILD && BUILD_LIST.length) selectBuild(BUILD_LIST[0].id, false);
+      if (!CURRENT_BUILD && BUILD_LIST.length) selectBuild(BUILD_LIST[0].id);
       else renderInstalled();
     }).catch(() => {
       BUILD_LIST = [];
@@ -935,7 +935,8 @@
     const q = ($('#bSearch').value || '').trim();
     const facets = [];
     if (CURRENT_BUILD) {
-      facets.push(['versions:' + CURRENT_BUILD.gameVersion, 'categories:' + CURRENT_BUILD.loader.toLowerCase()]);
+      facets.push(['versions:' + CURRENT_BUILD.gameVersion]);
+      if (B_TYPE === 'mod') facets.push(['categories:' + CURRENT_BUILD.loader.toLowerCase()]);
     }
     facets.push(['project_type:' + (B_TYPE === 'shaderpack' ? 'shader' : B_TYPE)]);
     if (B_CAT) facets.push(['categories:' + B_CAT]);
@@ -1405,8 +1406,8 @@
 
     buildTypeButtons();
     refreshBuilds();
-    refreshCatalog();
     api.invoke('update:check').then(u => { if (u && u.version) showUpdateModal(u); });
+    setTimeout(() => { if (!BUILD_LIST.length) refreshCatalog(); }, 1500);
 api.invoke('favs:list').then(f => { FAVS = Array.isArray(f) ? f : []; applyFavsToCards(); }).catch(() => {});
     api.invoke('versions:list').then(list => {
       if (Array.isArray(list) && list.length) {
