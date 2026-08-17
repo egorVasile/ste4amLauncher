@@ -1,4 +1,4 @@
-'use strict';
+﻿'use strict';
 const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
@@ -750,7 +750,7 @@ async function deleteBuild(buildId) {
   return true;
 }
 
-const NEWS_FEED = 'https://www.minecraft.net/en-us/feeds/community-content/rss';
+const NEWS_API = 'https://launchercontent.mojang.com/v2/news.json';
 function stripTags(s) {
   return String(s || '').replace(/<[^>]*>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#0?39;/g, "'").replace(/&#x27;/g, "'").trim();
 }
@@ -763,23 +763,38 @@ function fmtNewsDate(pub) {
 }
 async function fetchNews() {
   try {
-    const raw = await httpGet(NEWS_FEED, { Accept: 'application/rss+xml' });
+    const raw = await httpGet(NEWS_API, { Accept: 'application/json' });
     const buf = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
-
-    let xml = buf.toString('utf8');
-    if (xml.indexOf('\u0000') !== -1) xml = buf.toString('utf16le');
-    if (xml.charCodeAt(0) === 0xFEFF) xml = xml.slice(1);
+    let txt = buf.toString('utf8');
+    if (txt.charCodeAt(0) === 0xFEFF) txt = txt.slice(1);
+    const j = JSON.parse(txt);
     const out = [];
-    const itemRe = /<item>([\s\S]*?)<\/item>/g;
-    let m;
-    while ((m = itemRe.exec(xml)) !== null && out.length < 8) {
-      const it = m[1];
-      const title = stripTags((it.match(/<title>([\s\S]*?)<\/title>/) || [])[1]);
+    const entries = Array.isArray(j.entries) ? j.entries : [];
+    for (const e of entries) {
+      if (out.length >= 10) break;
+      const title = stripTags(e.title || '');
       if (!title) continue;
-      const desc = stripTags((it.match(/<description>([\s\S]*?)<\/description>/) || [])[1]);
-      const pub = (it.match(/<pubDate>([\s\S]*?)<\/pubDate>/) || [])[1] || '';
-      const link = (it.match(/href="([^"]+)"/) || [])[1] || '';
-      out.push({ title: title, desc: desc && desc !== title ? desc : '', date: fmtNewsDate(pub), link: link });
+      const text = String(e.text || '')
+        .replace(/<br\s*\/?>/gi, '\n')
+        .replace(/<\/(p|div|li|h[1-6])>/gi, '\n')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/&nbsp;/gi, ' ')
+        .replace(/&amp;/gi, '&')
+        .replace(/&quot;/gi, '"')
+        .replace(/&#39;/g, "'")
+        .replace(/&lt;/gi, '<')
+        .replace(/&gt;/gi, '>')
+        .replace(/[ \t]+/g, ' ')
+        .replace(/\n\s*\n+/g, '\n')
+        .trim();
+      const normUrl = (u) => u && u.indexOf('/') === 0 ? 'https://launchercontent.mojang.com' + u : (u || '');
+      const pImg = normUrl(e.playPageImage && e.playPageImage.url);
+      const nImg = normUrl(e.newsPageImage && e.newsPageImage.url);
+      const imgKey = (u) => (u.split('/').pop() || '').replace(/\.[a-z0-9]+$/i, '').replace(/[-_]\d+x\d+$/i, '');
+      const images = [];
+      if (pImg) images.push(pImg);
+      if (nImg && !images.some(x => imgKey(x) === imgKey(nImg))) images.push(nImg);
+      out.push({ title: title, desc: text.slice(0, 900), date: fmtNewsDate(e.date || ''), link: '', text: text || '', images: images });
     }
     return out;
   } catch (e) { log('news fetch error', e.message); try { fs.appendFileSync(process.env.TEMP + '/news_err.log', new Date().toISOString() + ' ' + (e && e.message) + '\n' + ((e && e.stack) || '') + '\n'); } catch (e2) {} return []; }
