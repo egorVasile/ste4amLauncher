@@ -39,7 +39,7 @@
         {
             "path": "src/renderer/app.js",
             "url": "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/renderer/app.js",
-            "sha256": "b1337b62e1fece1eb621528942a7b4f29667f3030ae59939e568f7ac247b678c"
+            "sha256": "2ada6f7164656b6a7ca1544aecf394c20c138322966dfd70b49b94432b47d6b2"
         },
         {
             "path": "src/renderer/icon.png",

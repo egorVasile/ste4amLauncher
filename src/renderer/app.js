@@ -964,6 +964,9 @@
     if (t === 'shader') t = 'shaderpack'; // API Modrinth отдаёт 'shader', в приложении 'shaderpack'
     return t;
   }
+  // Русское слово для типа в тостах/сообщениях (мини-фикс: «Мод» -> правильный тип)
+  const TYPE_WORDS = { mod: '\u041c\u043e\u0434', resourcepack: '\u0420\u0435\u0441\u0443\u0440\u0441\u043f\u0430\u043a', shaderpack: '\u0428\u0435\u0439\u0434\u0435\u0440', datapack: '\u0414\u0430\u0442\u0430\u043f\u0430\u043a' };
+  function typeWord(h) { return TYPE_WORDS[itemType(h)] || '\u042d\u043b\u0435\u043c\u0435\u043d\u0442'; }
 
   function refreshBuilds() {
     return api.invoke('builds:list').then(list => {
@@ -1386,10 +1389,10 @@
     try {
       if (exists) {
         FAVS = await api.invoke('favs:remove', h.slug);
-        showToast('\u041c\u043e\u0434 \u00ab' + h.title + '\u00bb \u0443\u0434\u0430\u043b\u0451\u043d \u0438\u0437 \u0438\u0437\u0431\u0440\u0430\u043d\u043d\u043e\u0433\u043e', true);
+        showToast(typeWord(h) + ' \u00ab' + h.title + '\u00bb \u0443\u0434\u0430\u043b\u0451\u043d \u0438\u0437 \u0438\u0437\u0431\u0440\u0430\u043d\u043d\u043e\u0433\u043e', true);
       } else {
         FAVS = await api.invoke('favs:add', { slug: h.slug, title: h.title, icon_url: h.icon_url || '', description: h.description || '', categories: h.categories || [], project_type: h.project_type || '', btype: B_TYPE });
-        showToast('\u041c\u043e\u0434 \u00ab' + h.title + '\u00bb \u0441\u043e\u0445\u0440\u0430\u043d\u0451\u043d \u0443\u0441\u043f\u0435\u0448\u043d\u043e!', false);
+        showToast(typeWord(h) + ' \u00ab' + h.title + '\u00bb \u0441\u043e\u0445\u0440\u0430\u043d\u0451\u043d \u0443\u0441\u043f\u0435\u0448\u043d\u043e!', false);
       }
     } catch (err) {
       showToast('\u041e\u0448\u0438\u0431\u043a\u0430: ' + (err.message || err), true);
@@ -1447,7 +1450,7 @@
       groups[t].forEach(f => sec.appendChild(favCard(f)));
       box.appendChild(sec);
     });
-    if (!any) box.innerHTML = '<div class="b-empty">\u041f\u043e\u043a\u0430 \u043f\u0443\u0441\u0442\u043e \u2014 \u0434\u043e\u0431\u0430\u0432\u043b\u044f\u0439\u0442\u0435 \u043c\u043e\u0434\u044b \u0432 \u0438\u0437\u0431\u0440\u0430\u043d\u043d\u043e\u0435 \u0444\u043b\u0430\u0436\u043a\u043e\u043c</div>';
+    if (!any) box.innerHTML = '<div class="b-empty">\u041f\u043e\u043a\u0430 \u043f\u0443\u0441\u0442\u043e \u2014 \u0434\u043e\u0431\u0430\u0432\u043b\u044f\u0439\u0442\u0435 \u043c\u043e\u0434\u044b, \u0440\u0435\u0441\u0443\u0440\u0441\u043f\u0430\u043a\u0438, \u0448\u0435\u0439\u0434\u0435\u0440\u044b \u0438 \u0434\u0430\u0442\u0430\u043f\u0430\u043a\u0438 \u0444\u043b\u0430\u0436\u043a\u043e\u043c</div>';
   }
 
   /* ---- Сравнение версий для подсветки нужной из диагноза ---- */
