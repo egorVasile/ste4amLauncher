@@ -51,7 +51,10 @@ function sha256File(file) {
 function killProcess(pid) {
   return new Promise((resolve) => {
     if (!pid) return resolve();
-    const p = spawn('taskkill', ['/pid', String(pid), '/f', '/t'], { windowsHide: true });
+    // ВАЖНО: БЕЗ /T! /T убивает всё дерево процесса, включая сам апдейтер
+    // (он запущен как дочерний процесс лаунчера) — обновление не успевает пройти.
+    // Убиваем только сам лаунчер; лаунчер обычно закрывается сам до этого момента.
+    const p = spawn('taskkill', ['/pid', String(pid), '/f'], { windowsHide: true });
     p.on('close', resolve);
     p.on('error', resolve);
   });

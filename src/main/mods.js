@@ -421,7 +421,7 @@ async function installForgeLike(build, gameVersion, loader, onProgress) {
     const p = spawn(java, ['-jar', installerPath, '--installClient', gameDir], { windowsHide: true });
     let out = '';
     let last = Date.now();
-    const tick = setInterval(() => { if (onProgress) onProgress(Math.min(0.97, 0.78 + (Date.now() - last) / 60000 * 0.18), 'Установка ' + loader + ' (это занимает минуту)...'); }, 250);
+    const tick = setInterval(() => { if (onProgress) onProgress(Math.min(0.97, 0.78 + (Date.now() - last) / 60000 * 0.18), 'Установка ' + loader + ' (это занимает минуту)...'); }, 500);
     p.stdout.on('data', c => { out += c.toString(); });
     p.stderr.on('data', c => out += c.toString());
     p.on('error', (e) => { clearInterval(tick); reject(e); });
@@ -1308,7 +1308,10 @@ function fmtNewsDate(pub) {
   const mm = String(d.getMonth() + 1).padStart(2, '0');
   return dd + '.' + mm + '.' + d.getFullYear();
 }
+// кэш новостей на 6 часов — не дёргаем сеть при каждом вызове
+let NEWS_CACHE = { t: 0, data: [] };
 async function fetchNews() {
+  if (Date.now() - NEWS_CACHE.t < 6 * 3600 * 1000 && NEWS_CACHE.data.length) return NEWS_CACHE.data;
   try {
     const raw = await httpGet(NEWS_API, { Accept: 'application/json' });
     const buf = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
@@ -1343,6 +1346,8 @@ async function fetchNews() {
       if (nImg && !images.some(x => imgKey(x) === imgKey(nImg))) images.push(nImg);
       out.push({ title: title, desc: text.slice(0, 900), date: fmtNewsDate(e.date || ''), link: '', text: text || '', images: images });
     }
+    NEWS_CACHE.t = Date.now();
+    NEWS_CACHE.data = out;
     return out;
   } catch (e) { log('news fetch error', e.message); try { fs.appendFileSync(process.env.TEMP + '/news_err.log', new Date().toISOString() + ' ' + (e && e.message) + '\n' + ((e && e.stack) || '') + '\n'); } catch (e2) {} return []; }
 }
@@ -1372,6 +1377,7 @@ module.exports = {
   mrSearch, mrProject, mrProjectVersions, mrVersion, mrCategories, mrLoaders, mrGameVersions,
   mrBatchProjects, mrBatchVersions,
   buildsList, buildCreate, deleteBuild, installedMods, installProject, deleteMod,
+  loadInstalled,
   exportBuild, importBuild, findModrinthByHash, packConfigs, unpackConfigs,
   findJava, findJavaMajor, javaCandidates, javaMajor, ensureJavaRuntime,
   modsDir, packsDir, buildDir, loadBuilds,

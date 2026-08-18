@@ -255,7 +255,19 @@ function registerIpc() {
     return ok;
   });
   ipcMain.handle('builds:installed', (_e, id, type) => mods.installedMods(id, type));
+  ipcMain.handle('builds:registry', (_e, id) => mods.loadInstalled(id));
 ipcMain.handle('news:fetch', () => mods.fetchNews());
+  ipcMain.handle('system:gpu', () => {
+    try {
+      if (!app.getGPUFeatureStatus) return null;
+      const s = app.getGPUFeatureStatus();
+      return {
+        gpu_compositing: s.gpu_compositing || '',
+        software: (s.gpu_compositing === 'disabled_software' || s.gpu_compositing === 'disabled_off') ||
+                  (s.angle_swiftshader && s.angle_swiftshader === 'disabled_off')
+      };
+    } catch (e) { return null; }
+  });
 ipcMain.handle('favs:list', () => mods.favsList());
 ipcMain.handle('favs:add', async (_e, item) => mods.favsAdd(item));
 ipcMain.handle('favs:remove', async (_e, slug) => mods.favsRemove(slug));
@@ -266,6 +278,7 @@ ipcMain.handle('update:check', async () => {
 ipcMain.handle('update:now', async () => {
   try { await updater.launchUpdater(store); return true; } catch (e) { return false; }
 });
+ipcMain.handle('update:status', () => updater.lastUpdateStatus());
   ipcMain.handle('builds:install-mod', async (e, opts) => {
     const r = await mods.installProject({
       buildId: opts && opts.buildId,

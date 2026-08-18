@@ -119,7 +119,34 @@ async function launchUpdater(store) {
   const env = Object.assign({}, process.env, { ELECTRON_RUN_AS_NODE: '1' });
   const child = spawn(process.execPath, args, { detached: true, stdio: 'ignore', env });
   child.unref();
+  // ВАЖНО: updater.js из манифеста гасит лаунчер через `taskkill /PID <pid> /F /T`.
+  // /T убивает ВСЁ дерево процесса, включая сам updater (он наш дочерний процесс),
+  // поэтому лаунчер должен закрыться сам, ДО того как апдейтер вызовет taskkill.
+  // Апдейтер ждёт исчезновения процесса (waitGone) и продолжит работу.
+  setTimeout(() => { try { app.quit(); } catch (e) { /* noop */ } }, 600);
   return true;
 }
 
-module.exports = { checkUpdate, launchUpdater };
+// Статус последнего запуска апдейтера (для показа в интерфейсе после перезапуска)
+function lastUpdateStatus() {
+  const updateDir = path.join(app.getAppPath(), 'update');
+  const errLog = path.join(updateDir, 'updater-error.log');
+  const logFile = path.join(updateDir, 'updater.log');
+  try {
+    if (fs.existsSync(errLog)) {
+      const err = fs.readFileSync(errLog, 'utf8').slice(0, 600);
+      try { fs.unlinkSync(errLog); } catch (e) { /* noop */ }
+      return { ok: false, error: err || 'updater failed' };
+    }
+    if (fs.existsSync(logFile)) {
+      const txt = fs.readFileSync(logFile, 'utf8');
+      if (/\bdone\b/.test(txt)) {
+        try { fs.unlinkSync(logFile); } catch (e) { /* noop */ }
+        return { ok: true };
+      }
+    }
+  } catch (e) { /* noop */ }
+  return { ok: false, error: null };
+}
+
+module.exports = { checkUpdate, launchUpdater, lastUpdateStatus };

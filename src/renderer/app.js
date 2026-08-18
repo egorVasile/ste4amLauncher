@@ -23,22 +23,32 @@
 
   /* ===== Акцентный цвет иконки (края/углы) ===== */
   const ACCENT_CACHE = {};
+  // Очередь с лимитом: декодирование картинок и чтение пикселей — CPU-bound,
+  // обрабатываем понемногу, чтобы не создавать пиков при отрисовке списков
+  const accentQueue = [];
+  let accentBusy = 0;
+  const ACCENT_MAX = 4;
   function applyEdgeAccent(imgEl, targetEl) {
-    const src = imgEl.src;
+    const src = imgEl && imgEl.src;
     if (!src) return;
     if (ACCENT_CACHE[src] !== undefined) {
       if (ACCENT_CACHE[src]) setAccent(targetEl, ACCENT_CACHE[src]);
       return;
     }
-    const im = new Image();
-    im.crossOrigin = 'anonymous';
-    im.onload = () => {
-      // Обработку канваса откладываем до простоя — не блокируем рендер списков
-      const process = () => {
+    accentQueue.push({ src, targetEl });
+    pumpAccent();
+  }
+  function pumpAccent() {
+    while (accentBusy < ACCENT_MAX && accentQueue.length) {
+      const job = accentQueue.shift();
+      accentBusy++;
+      const im = new Image();
+      im.decoding = 'async';
+      im.crossOrigin = 'anonymous';
+      im.onload = () => {
         try {
           const S = 32;
-          const c = document.createElement('canvas');
-          c.width = S; c.height = S;
+          const c = new OffscreenCanvas(S, S);
           const ctx = c.getContext('2d', { willReadFrequently: true });
           ctx.drawImage(im, 0, 0, S, S);
           const d = ctx.getImageData(0, 0, S, S).data;
@@ -74,15 +84,15 @@
               return 'hsl(' + Math.round(h) + ',72%,55%)';
             });
           }
-          ACCENT_CACHE[src] = cols;
-          if (cols) setAccent(targetEl, cols);
-        } catch (e) { ACCENT_CACHE[src] = null; }
+          ACCENT_CACHE[job.src] = cols;
+          if (cols) setAccent(job.targetEl, cols);
+        } catch (e) { ACCENT_CACHE[job.src] = null; }
+        accentBusy--;
+        pumpAccent();
       };
-      if (window.requestIdleCallback) window.requestIdleCallback(process, { timeout: 2000 });
-      else setTimeout(process, 0);
-    };
-    im.onerror = () => { ACCENT_CACHE[src] = null; };
-    im.src = src;
+      im.onerror = () => { ACCENT_CACHE[job.src] = null; accentBusy--; pumpAccent(); };
+      im.src = job.src;
+    }
   }
   function rgbHue(r, g, b) {
     const mx = Math.max(r, g, b), mn = Math.min(r, g, b), df = mx - mn;
@@ -425,7 +435,7 @@
 
   /* ===== Настройки (реальные) ===== */
   const modal = $('#modalBackdrop');
-  let settingsCache = { username: 'Player', ram: 2, mirror: 'auto', theme: 'dark', totalRam: 8, width: '', height: '', launcherMode: 'keep' };
+  let settingsCache = { username: 'Player', ram: 2, mirror: 'auto', theme: 'dark', totalRam: 8, width: '', height: '', launcherMode: 'keep', economy: false };
 
   function safeRam(r) {
     const n = parseInt(r, 10);
@@ -449,6 +459,7 @@
       <div class="set-row"><div><div class="s-label">ПОКАЗЫВАТЬ СНАПШОТЫ</div><div class="s-desc">Скрыть нестабильные версии из списка</div></div><div class="switch ${settingsCache.showSnapshots ? 'on' : ''}" id="swSnap"></div></div>
       <div class="set-row"><div><div class="s-label">СТАРЫЕ ВЕРСИИ</div><div class="s-desc">Показывать alpha/beta (2010-2013)</div></div><div class="switch ${settingsCache.showOldVersions ? 'on' : ''}" id="swOld"></div></div>
       <div class="set-row"><div><div class="s-label">ОПТИМИЗАЦИЯ МАЙНКРАФТА</div><div class="s-desc">G1GC-флаги, быстрый запуск, настройки памяти</div></div><div class="switch ${settingsCache.optimize ? 'on' : ''}" id="swOpt"></div></div>
+      <div class="set-row"><div><div class="s-label">ЭКОНОМИЯ CPU</div><div class="s-desc" style="color:var(--mc-green-2)">Отключить декоративные анимации и дрифт фона — меньше нагрузка на процессор</div></div><div class="switch ${settingsCache.economy ? 'on' : ''}" id="swEco"></div></div>
       <div class="set-row"><div><div class="s-label">JVM-АРГУМЕНТЫ</div><div class="s-desc">Дополнительные флаги для Java (через пробел)</div></div><input type="text" id="jvmInput" value="${escapeHtml(settingsCache.jvmArgs)}" placeholder="-XX:+UseZGC ..." style="background:var(--mc-grey-5);border:2px solid var(--mc-off-black);color:var(--mc-off-white);padding:7px 10px;font-family:Consolas,monospace;font-size:12px;width:220px;outline:none"/></div>
       <div class="set-row"><div><div class="s-label">ЗЕРКАЛО</div><div class="s-desc">auto = Mojang, при ошибке BMCLAPI</div></div><div class="dropdown" style="padding:7px 12px;font-size:13px" id="mirrorDD">&#9662; ${settingsCache.mirror}</div></div>
       <div class="set-row"><div><div class="s-label">JAVA</div><div class="s-desc">Найденная Java при запуске</div></div><button class="dropdown" style="padding:7px 12px;font-size:13px" id="javaBtn">НАЙТИ JAVA</button></div>
@@ -504,6 +515,14 @@
       $('#swOpt').classList.toggle('on', settingsCache.optimize);
       api.invoke('settings:set', 'optimize', settingsCache.optimize);
       setStatus(settingsCache.optimize ? 'ОПТИМИЗАЦИЯ ВКЛЮЧЕНА' : 'ОПТИМИЗАЦИЯ ВЫКЛЮЧЕНА', '');
+    });
+    const ecoSw = $('#swEco');
+    if (ecoSw) ecoSw.addEventListener('click', () => {
+      settingsCache.economy = !settingsCache.economy;
+      ecoSw.classList.toggle('on', settingsCache.economy);
+      api.invoke('settings:set', 'economy', settingsCache.economy);
+      applyEco();
+      setStatus(settingsCache.economy ? 'ЭКОНОМИЯ CPU: ВКЛ' : 'ЭКОНОМИЯ CPU: ВЫКЛ', '');
     });
     $('#mirrorDD').addEventListener('click', () => {
       const next = settingsCache.mirror === 'auto' ? 'bmclapi' : (settingsCache.mirror === 'bmclapi' ? 'mojang' : 'auto');
@@ -564,7 +583,7 @@
     });
     $('#resetBtn').addEventListener('click', () => {
       ram.value = 2; $('#ram2v').textContent = '2 GB';
-      settingsCache = { ...settingsCache, ram: 2, jvmArgs: '', showSnapshots: true, optimize: true, width: '', height: '', launcherMode: 'keep' };
+      settingsCache = { ...settingsCache, ram: 2, jvmArgs: '', showSnapshots: true, optimize: true, width: '', height: '', launcherMode: 'keep', economy: false };
       api.invoke('settings:set', 'ram', 2);
       api.invoke('settings:set', 'jvmArgs', '');
       api.invoke('settings:set', 'showSnapshots', true);
@@ -572,6 +591,8 @@
       api.invoke('settings:set', 'width', '');
       api.invoke('settings:set', 'height', '');
       api.invoke('settings:set', 'launcherMode', 'keep');
+      api.invoke('settings:set', 'economy', false);
+      applyEco();
       $('#lmSeg').querySelectorAll('.t-opt').forEach(b => b.classList.toggle('sel', b.dataset.lm === 'keep'));
       const rW = $('#resW'), rH = $('#resH');
       if (rW) rW.value = '';
@@ -744,7 +765,14 @@
     oom:             { label: 'НЕ ХВАТАЕТ ПАМЯТИ', color: '#d8a03a' },
     no_java:         { label: 'ПРОБЛЕМА С JAVA', color: '#d8a03a' },
     assets:          { label: 'ОШИБКА РЕСУРСОВ', color: '#d8a03a' },
-    login:           { label: 'ПРОБЛЕМА С АККАУНТОМ', color: '#d8a03a' }
+    login:           { label: 'ПРОБЛЕМА С АККАУНТОМ', color: '#d8a03a' },
+    mixin:           { label: 'ОШИБКА MIXIN', color: '#ca3636' },
+    no_class:        { label: 'НЕТ КЛАССА / API', color: '#d8a03a' },
+    missing_lib:     { label: 'НЕТ БИБЛИОТЕКИ', color: '#d8a03a' },
+    loader_crash:    { label: 'СБОЙ ЗАГРУЗЧИКА МОДОВ', color: '#d8a03a' },
+    native:          { label: 'ОШИБКА СИСТЕМНЫХ БИБЛИОТЕК', color: '#d8a03a' },
+    gpu:             { label: 'ПРОБЛЕМА С ВИДЕОКАРТОЙ', color: '#d8a03a' },
+    corrupt:         { label: 'ПОВРЕЖДЁННЫЙ ФАЙЛ', color: '#d8a03a' }
   };
   const DIAG_BTN = {
     install: { text: '\u2795 \u0421\u041a\u0410\u0427\u0410\u0422\u042c', cls: 'play' },
@@ -776,7 +804,7 @@
         setStatus('\u041e\u0428\u0418\u0411\u041a\u0410: ' + (err && err.message || err), 'busy');
       });
     } else {
-      api.invoke('builds:install-mod', { buildId, project: m.slug, versionId: null, withDeps: false, type: 'mod' }).then(() => {
+      api.invoke('builds:install-mod', { buildId, project: m.slug, versionId: null, withDeps: true, type: 'mod' }).then(() => {
         setStatus('\u041c\u041e\u0414 \u0423\u0421\u0422\u0410\u041d\u041e\u0412\u041b\u0415\u041d: ' + m.title, '');
         if (btn) { btn.textContent = '\u2713 \u0423\u0421\u0422\u0410\u041d\u041e\u0412\u041b\u0415\u041d'; }
         refreshBuilds();
@@ -813,7 +841,7 @@
           }
           html += `
             <div class="b-hit" data-slug="${escapeHtml(m.slug)}" style="cursor:pointer">
-              <img src="${m.icon_url || modThumb(m.slug + '.jar')}" alt="" style="width:36px;height:36px;object-fit:contain;background:var(--mc-grey-6);border:2px solid var(--mc-off-black);flex-shrink:0"/>
+              <img src="${m.icon_url || modThumb(m.slug + '.jar')}" alt=""/>
               <div class="bh-body" style="min-width:0">
                 <div class="bh-name" style="font-size:12px">${escapeHtml(m.title)}</div>
                 <div class="bh-meta" style="flex-wrap:wrap">${relParts.join('')}</div>
@@ -888,10 +916,11 @@
   let BUILD_LIST = [];
   let CURRENT_BUILD = null;
   let B_OFFSET = 0;
+  let B_CAT = null;
+  const CAT_CACHE = {}; // кэш результатов поиска Modrinth (по ключу запроса)
   const B_TYPES = [['mod', 'МОДЫ'], ['resourcepack', 'РЕСУРСПАКИ'], ['shaderpack', 'ШЕЙДЕРЫ'], ['datapack', 'ДАТАПАКИ']];
   let B_TYPE = 'mod';
   let INST_QUERY = '';
-  let B_CAT = null;
 
   function refreshBuilds() {
     return api.invoke('builds:list').then(list => {
@@ -915,7 +944,7 @@
     renderBuilds();
     renderDetailBuild();
     renderInstalled();
-    if (refreshCat !== false) { B_OFFSET = 0; refreshCatalog(); }
+    if (refreshCat === true) { B_OFFSET = 0; refreshCatalog(); }
     if (CURRENT_BUILD) {
       const b = CURRENT_BUILD;
       $('#versionTitle').textContent = b.name;
@@ -929,27 +958,32 @@
   function renderBuilds() {
     const list = $('#bList');
     if (!list) return;
-    list.innerHTML = '';
     if (!BUILD_LIST.length) {
       list.innerHTML = '<div class="b-empty">Сборок пока нет — создайте первую!</div>';
       return;
     }
+    // Собираем HTML одним куском — меньше layout/GC; стаггер только первых 8
+    let html = '';
     BUILD_LIST.forEach((b, i) => {
-      const card = document.createElement('div');
-      card.className = 'b-card' + (CURRENT_BUILD && CURRENT_BUILD.id === b.id ? ' sel' : '');
-      card.style.animationDelay = (i * 0.04) + 's';
-      card.innerHTML = `
-        <img src="${ic(b.icon || 'Grass.png')}" alt=""/>
-        <div class="bc-body">
-          <div class="b-name">${escapeHtml(b.name)}</div>
-          <div class="b-meta">
-            <span class="b-tag green">${escapeHtml(b.gameVersion)}</span>
-            <span class="b-tag">${escapeHtml(b.loader)}</span>
-            <span class="b-tag">${b.modCount || 0} модов</span>
+      const sel = CURRENT_BUILD && CURRENT_BUILD.id === b.id ? ' sel' : '';
+      const delay = i < 8 ? ';animation-delay:' + (i * 0.04).toFixed(2) + 's' : '';
+      html += `
+        <div class="b-card${sel}" data-bid="${escapeHtml(b.id)}" style="${delay}">
+          <img src="${ic(b.icon || 'Grass.png')}" alt="" loading="lazy" decoding="async"/>
+          <div class="bc-body">
+            <div class="b-name">${escapeHtml(b.name)}</div>
+            <div class="b-meta">
+              <span class="b-tag green">${escapeHtml(b.gameVersion)}</span>
+              <span class="b-tag">${escapeHtml(b.loader)}</span>
+              <span class="b-tag">${b.modCount || 0} модов</span>
+            </div>
           </div>
         </div>`;
-      card.addEventListener('click', () => selectBuild(b.id));
-      list.appendChild(card);
+    });
+    list.innerHTML = html;
+    list.querySelectorAll('.b-card').forEach(card => {
+      const bid = card.dataset.bid;
+      card.addEventListener('click', () => selectBuild(bid));
       const cardImg = card.querySelector('img');
       if (cardImg) applyEdgeAccent(cardImg, card);
     });
@@ -1073,35 +1107,41 @@
       return;
     }
     api.invoke('builds:installed', CURRENT_BUILD.id, B_TYPE).then(mods => {
-      const list = (Array.isArray(mods) ? mods : []).filter(m => !INST_QUERY || (m.filename || "").toLowerCase().includes(INST_QUERY));
+      const all = Array.isArray(mods) ? mods : [];
+      const list = INST_QUERY ? all.filter(m => (m.filename || "").toLowerCase().includes(INST_QUERY)) : all;
       if (cnt) cnt.textContent = list.length ? list.length + ' шт.' : '';
-      box.innerHTML = '';
       if (!list.length) {
         box.innerHTML = '<div class="b-empty">' + (B_TYPE === 'mod' ? 'Модов нет — установите из каталога справа' : (B_TYPE === 'resourcepack' ? 'Ресурспаков нет — установите из каталога' : (B_TYPE === 'shaderpack' ? 'Шейдеров нет — установите из каталога' : 'Датапаков нет — установите из каталога'))) + '</div>';
         return;
       }
+      // Собираем HTML одним куском — меньше layout/GC; стаггер только первых 8
+      let html = '';
       list.forEach((m, i) => {
-        const row = document.createElement('div');
-        row.className = 'b-mod';
-        row.style.animationDelay = (i * 0.03) + 's';
         const mb = (m.size / 1048576).toFixed(1);
         const filenameEsc = escapeHtml(m.filename);
-        row.innerHTML = `
-          <div class="b-mod-img"><img src="${modThumb(m.filename)}" alt="" loading="lazy" onerror="this.style.display='none'"></div>
-          <div class="b-mod-content">
-            <div class="bm-name" title="${filenameEsc}">${filenameEsc}</div>
-            <div class="bm-size">${mb} MB</div>
-          </div>
-          <button class="bm-x" data-f="${filenameEsc}">&#10005;</button>`;
-        row.querySelector('.bm-x').addEventListener('click', () => {
-          api.invoke('builds:delete-mod', CURRENT_BUILD.id, m.filename, B_TYPE).then(() => {
+        const delay = i < 8 ? ';animation-delay:' + (i * 0.03).toFixed(2) + 's' : '';
+        html += `
+          <div class="b-mod" data-f="${filenameEsc}" style="${delay}">
+            <div class="b-mod-img"><img src="${modThumb(m.filename)}" alt="" loading="lazy" decoding="async" onerror="this.style.display='none'"></div>
+            <div class="b-mod-content">
+              <div class="bm-name" title="${filenameEsc}">${filenameEsc}</div>
+              <div class="bm-size">${mb} MB</div>
+            </div>
+            <button class="bm-x" data-f="${filenameEsc}">&#10005;</button>
+          </div>`;
+      });
+      box.innerHTML = html;
+      box.querySelectorAll('.b-mod').forEach(row => {
+        const f = row.dataset.f;
+        const x = row.querySelector('.bm-x');
+        if (x) x.addEventListener('click', () => {
+          api.invoke('builds:delete-mod', CURRENT_BUILD.id, f, B_TYPE).then(() => {
             setStatus((B_TYPES.find(t => t[0] === B_TYPE) || ['', 'МОД'])[1] + ' УДАЛЁН', '');
             renderInstalled();
           }).catch(() => {});
         });
         const bImg = row.querySelector('.b-mod-img img');
         if (bImg) applyEdgeAccent(bImg, row);
-        box.appendChild(row);
       });
     }).catch(err => {
       box.innerHTML = '<div class=\x22b-empty\x22>ERR: ' + escapeHtml((err && err.message) || String(err)) + '</div>';
@@ -1162,39 +1202,50 @@
     }
     facets.push(['project_type:' + (B_TYPE === 'shaderpack' ? 'shader' : B_TYPE)]);
     if (B_CAT) facets.push(['categories:' + B_CAT]);
-    api.invoke('modrinth:search', { query: q, facets, limit: 25, offset: B_OFFSET }).then(res => {
+    const cacheKey = q + '|' + JSON.stringify(facets) + '|' + B_OFFSET;
+    const render = res => {
       if (info && res.total_hits) info.textContent = res.total_hits + ' результатов';
-      box.innerHTML = '';
       if (!res.hits || !res.hits.length) {
         box.innerHTML = '<div class="b-empty">Ничего не найдено</div>';
         return;
       }
+      // Собираем HTML одним куском; стаггер только первых 8
+      let html = '';
       res.hits.forEach((h, i) => {
-        const row = document.createElement('div');
-        row.className = 'b-hit';
-        row.style.animationDelay = (i * 0.03) + 's';
         const dl = Math.round(h.downloads / 1000) + 'K';
-        row.innerHTML = `
-          <button class="b-fav" data-slug="${h.slug}" title=""></button>
-          <img src="${h.icon_url || ''}" alt=""/>
-          <div class="bh-body">
-            <div class="bh-name">${escapeHtml(h.title)}</div>
-            <div class="bh-desc">${escapeHtml(h.description || '')}</div>
-            <div class="bh-meta"><span class="b-tag">${dl} скач.</span>${h.categories && h.categories.length ? '<span class="b-tag">' + escapeHtml(h.categories.join(', ')) + '</span>' : ''}</div>
+        const delay = i < 8 ? ';animation-delay:' + (i * 0.03).toFixed(2) + 's' : '';
+        html += `
+          <div class="b-hit" data-slug="${escapeHtml(h.slug)}" style="cursor:pointer;${delay}">
+            <button class="b-fav" data-slug="${escapeHtml(h.slug)}" title=""></button>
+            <img src="${h.icon_url || ''}" alt="" loading="lazy" decoding="async"/>
+            <div class="bh-body">
+              <div class="bh-name">${escapeHtml(h.title)}</div>
+              <div class="bh-desc">${escapeHtml(h.description || '')}</div>
+              <div class="bh-meta"><span class="b-tag">${dl} скач.</span>${h.categories && h.categories.length ? '<span class="b-tag">' + escapeHtml(h.categories.join(', ')) + '</span>' : ''}</div>
+            </div>
           </div>`;
-        row.addEventListener('click', () => openModPage(h));
+      });
+      box.innerHTML = html;
+      box.querySelectorAll('.b-hit').forEach(row => {
+        const slug = row.dataset.slug;
+        const hh = (res.hits || []).find(x => x.slug === slug);
+        row.addEventListener('click', () => openModPage(hh));
         const fbtn = row.querySelector('.b-fav');
         if (fbtn) {
           fbtn.innerHTML = favIcon();
-          fbtn.classList.toggle('on', isFav(h.slug));
-          fbtn.addEventListener('click', (e) => { e.stopPropagation(); toggleFav(h, fbtn); });
+          fbtn.classList.toggle('on', isFav(slug));
+          fbtn.addEventListener('click', (e) => { e.stopPropagation(); if (hh) toggleFav(hh, fbtn); });
         }
-        const bImg = row.querySelector('.b-mod-img img');
-        if (bImg) applyEdgeAccent(bImg, row);
-        box.appendChild(row);
         const hitImg = row.querySelector('img');
         if (hitImg && hitImg.src) applyEdgeAccent(hitImg, row);
       });
+    };
+    if (CAT_CACHE[cacheKey]) { render(CAT_CACHE[cacheKey]); return; }
+    api.invoke('modrinth:search', { query: q, facets, limit: 25, offset: B_OFFSET }).then(res => {
+      CAT_CACHE[cacheKey] = res;
+      const keys = Object.keys(CAT_CACHE);
+      if (keys.length > 50) delete CAT_CACHE[keys[0]];
+      render(res);
     }).catch(err => {
       box.innerHTML = '<div class="b-empty">Ошибка: ' + escapeHtml(err.message || err) + '</div>';
     });
@@ -1378,8 +1429,174 @@
     return ok;
   }
 
+  /* ---- Требования: каким установленным модам нужен этот мод/версия ---- */
+  // REQS[projectId] = [{ neededBy, range, versionId }] — проекты и версии, которые требуют этот мод
+  let REQS = {};
+  let REQS_READY = false;
+  let REQS_PROMISE = null;
+  let REQ_SIG = null;
+  const REQ_VER_CACHE = {}; // кеш версий Modrinth по buildId|slug
+  let OPEN_MOD = null; // открытая страница мода: { h, hl }
+  let driftCtl = null; // управление дрифтом фона (старт/стоп)
+
+  function invalidateReqs() {
+    REQS_READY = false;
+    REQS_PROMISE = null;
+  }
+
+  function reqsPromise() {
+    if (REQS_PROMISE) return REQS_PROMISE;
+    REQS_PROMISE = buildRequirements()
+      .then(reqs => { REQS = reqs; REQS_READY = true; return reqs; })
+      .catch(err => { REQS = {}; REQS_READY = false; return REQS; });
+    return REQS_PROMISE;
+  }
+
+  // Сканируем установленные моды, для каждого находим установленную версию
+  // и собираем её required-зависимости. Зависимость, уже установленная,
+  // не считается «нужной».
+  async function buildRequirements() {
+    const reqs = {};
+    if (!CURRENT_BUILD) return reqs;
+    const b = CURRENT_BUILD;
+    const reg = await api.invoke('builds:registry', b.id).catch(() => null);
+    const files = (reg && Array.isArray(reg.files) ? reg.files : [])
+      .filter(f => f.type === 'mod' && f.slug && f.filename);
+    const sig = files.map(f => f.slug + ':' + f.filename).sort().join('|');
+    if (REQS_READY && sig === REQ_SIG) return REQS; // набор модов не менялся
+    if (!files.length) { REQ_SIG = sig; return reqs; }
+    // Кеш на диск: при холодном старте не переспрашиваем Modrinth, если набор модов тот же
+    const lsKey = 'reqsCache_v1_' + b.id;
+    if (!REQS_READY) {
+      try {
+        const st = JSON.parse(localStorage.getItem(lsKey) || 'null');
+        if (st && st.sig === sig && st.reqs) { REQ_SIG = sig; return st.reqs; }
+      } catch (e) {}
+    }
+    const loader = b.loader ? String(b.loader).toLowerCase() : null;
+    const entries = [];
+    for (const f of files) {
+      const key = b.id + '|' + f.slug;
+      if (!REQ_VER_CACHE[key]) {
+        try { REQ_VER_CACHE[key] = await api.invoke('modrinth:versions', f.slug, b.gameVersion, loader); }
+        catch (e) { REQ_VER_CACHE[key] = []; }
+      }
+      const vers = Array.isArray(REQ_VER_CACHE[key]) ? REQ_VER_CACHE[key] : [];
+      const iv = vers.find(v => (v.files || []).some(x => x.filename === f.filename));
+      if (iv) entries.push({ f, iv });
+    }
+    // заголовки установленных модов (для надписи «нужен для ...»)
+    const titlesById = {};
+    try {
+      const ids = entries.map(x => x.iv.project_id).filter(Boolean);
+      if (ids.length) {
+        const projs = await api.invoke('modrinth:batch-projects', ids);
+        (projs || []).forEach(p => { if (p && p.id) titlesById[p.id] = p.title || p.slug; });
+      }
+    } catch (e) {}
+    const installedIds = new Set();
+    for (const x of entries) { if (x.iv.project_id) installedIds.add(x.iv.project_id); }
+    for (const x of entries) {
+      const pid = x.iv.project_id;
+      const title = titlesById[pid] || x.f.slug;
+      const deps = (x.iv.dependencies || [])
+        .filter(d => d.dependency_type === 'required' && d.project_id)
+        .filter(d => !installedIds.has(d.project_id)); // уже стоит — не «нужна»
+      for (const d of deps) {
+        const entry = { neededBy: title, range: d.version_range || null, versionId: d.version_id || null };
+        if (!reqs[d.project_id]) reqs[d.project_id] = [];
+        if (!reqs[d.project_id].some(r => r.neededBy === entry.neededBy && r.range === entry.range && r.versionId === entry.versionId)) {
+          reqs[d.project_id].push(entry);
+        }
+      }
+    }
+    REQ_SIG = sig;
+    try { localStorage.setItem(lsKey, JSON.stringify({ sig: sig, reqs: reqs })); } catch (e) {}
+    return reqs;
+  }
+
+  // Есть ли у версии v конкретное требование (золотая подсветка)
+  function versionNeed(needed, v) {
+    const out = { gold: false, neededBy: [], range: null };
+    for (const n of (needed || [])) {
+      const ok = n.versionId ? n.versionId === v.id
+        : (n.range ? versionMatchesRange(v.version_number, n.range) : false);
+      if (!ok) continue;
+      out.gold = true;
+      if (!out.neededBy.includes(n.neededBy)) out.neededBy.push(n.neededBy);
+      if (n.range && !out.range) out.range = n.range;
+    }
+    return out;
+  }
+
+  // Рендер списка версий с золотой подсветкой нужной версии и надписью «нужен для ...»
+  function renderModVersions(box, h, hl) {
+    box.innerHTML = '<div class="b-empty">\u0417\u0430\u0433\u0440\u0443\u0437\u043a\u0430...</div>';
+    if (!CURRENT_BUILD) {
+      box.innerHTML = '<div class="b-empty">\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0441\u0431\u043e\u0440\u043a\u0443</div>';
+      return;
+    }
+    reqsPromise().then(reqs => api.invoke('modrinth:versions', h.slug, CURRENT_BUILD.gameVersion, B_TYPE === 'mod' ? CURRENT_BUILD.loader.toLowerCase() : null)
+      .then(vers => {
+        const list = Array.isArray(vers) ? vers : [];
+        const pid = (list[0] && list[0].project_id) || null;
+        return { list, needed: pid ? (reqs[pid] || []) : [] };
+      })
+    ).then(({ list, needed }) => {
+      box.innerHTML = '';
+      if (!list.length) {
+        box.innerHTML = '<div class="b-empty">\u041d\u0435\u0442 \u0432\u0435\u0440\u0441\u0438\u0439 \u0434\u043b\u044f ' + escapeHtml(CURRENT_BUILD.gameVersion) + (B_TYPE === 'mod' ? ' / ' + escapeHtml(CURRENT_BUILD.loader) : '') + '</div>';
+        return;
+      }
+      // требование «любая версия» (без диапазона) -> плашка над списком, не золотая подсветка
+      const anyNeeded = needed.filter(n => !n.range && !n.versionId);
+      const specificNeeded = needed.filter(n => n.range || n.versionId);
+      if (anyNeeded.length) {
+        const who = [...new Set(anyNeeded.map(n => n.neededBy))];
+        const ban = document.createElement('div');
+        ban.style.cssText = 'border:1px dashed rgba(240,185,11,.55);background:rgba(240,185,11,.08);border-radius:6px;padding:7px 10px;margin-bottom:8px;font-family:var(--mc-font-body);font-size:11px;color:var(--mc-grey-1);line-height:1.5';
+        ban.innerHTML = '<span style="color:#f0b90b;font-weight:600">\u041d\u0423\u0416\u0415\u041d \u0414\u041b\u042f:</span> ' + escapeHtml(who.join(', ')) + ' (\u043b\u044e\u0431\u0430\u044f \u0432\u0435\u0440\u0441\u0438\u044f)';
+        box.appendChild(ban);
+      }
+      list.slice(0, 30).forEach(v => {
+        const f = (v.files || []).find(x => x.primary) || (v.files || [])[0];
+        const mb = f && f.size ? (f.size / 1048576).toFixed(1) + ' MB' : '';
+        const date = fmtDate(v.date_published);
+        const type = v.version_type ? (v.version_type.charAt(0).toUpperCase() + v.version_type.slice(1)) : '';
+        const gvs = (v.game_versions || []).slice(0, 3).join(', ') + ((v.game_versions || []).length > 3 ? '...' : '');
+        // подсветка: нужная по диагнозу ИЛИ требуемая установленным модом
+        const need = versionNeed(specificNeeded, v);
+        const diagMatch = !!(hl && hl.needVersion && versionMatchesRange(v.version_number, hl.needVersion));
+        const gold = need.gold || diagMatch;
+        const row = document.createElement('div');
+        row.className = 'b-mod b-ver-row' + (gold ? ' hl' : '');
+        row.dataset.vid = v.id || '';
+        let tags = '';
+        if (diagMatch) tags += '<span class="b-tag" style="color:#f0b90b">\u2713 \u041d\u0443\u0436\u043d\u0430\u044f \u0432\u0435\u0440\u0441\u0438\u044f</span>';
+        if (need.gold && need.neededBy.length) {
+          tags += '<span class="b-tag" style="color:#f0b90b">\u043d\u0443\u0436\u0435\u043d \u0434\u043b\u044f: ' + escapeHtml(need.neededBy.join(', ')) + (need.range ? ' &middot; \u0432\u0435\u0440\u0441\u0438\u044f ' + escapeHtml(need.range) : '') + '</span>';
+        }
+        row.innerHTML = `
+          <div style="display:flex;flex-direction:column;gap:3px;min-width:0">
+            <div class="bm-name">${escapeHtml(gvs)} &middot; ${escapeHtml((v.loaders || []).join('/'))} ${tags}</div>
+            <div class="bm-meta">${type ? escapeHtml(type) + ' &middot; ' : ''}${date}${mb ? ' &middot; ' + mb : ''}</div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:4px;margin-top:2px">
+            <button class="b-mini play" data-dep="0" style="width:100%">\u0423\u0441\u0442\u0430\u043d\u043e\u0432\u0438\u0442\u044c</button>
+            <button class="b-mini" data-dep="1" style="width:100%">\u0421 \u0437\u0430\u0432\u0438\u0441\u0438\u043c\u043e\u0441\u0442\u044f\u043c\u0438</button>
+          </div>`;
+        row.querySelector('[data-dep="0"]').addEventListener('click', () => doInstall(h, v, false));
+        row.querySelector('[data-dep="1"]').addEventListener('click', () => doInstall(h, v, true));
+        box.appendChild(row);
+      });
+    }).catch(err => {
+      box.innerHTML = '<div class="b-empty">\u041e\u0448\u0438\u0431\u043a\u0430: ' + escapeHtml(err.message || err) + '</div>';
+    });
+  }
+
   function openModPage(h, hl) {
     const fam = isFav(h.slug);
+    OPEN_MOD = { h, hl: hl || null };
     openModal(escapeHtml(h.title), `
       <div class="mp-head">
         <img class="mp-icon" src="${h.icon_url || ''}" alt=""/>
@@ -1450,44 +1667,7 @@
       }
     }).catch(() => {});
     const box = $('#mVers');
-    box.innerHTML = '<div class="b-empty">\u0417\u0430\u0433\u0440\u0443\u0437\u043a\u0430...</div>';
-    if (!CURRENT_BUILD) {
-      box.innerHTML = '<div class="b-empty">\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0441\u0431\u043e\u0440\u043a\u0443</div>';
-      return;
-    }
-    api.invoke('modrinth:versions', h.slug, CURRENT_BUILD.gameVersion, B_TYPE === 'mod' ? CURRENT_BUILD.loader.toLowerCase() : null).then(vers => {
-      const list = Array.isArray(vers) ? vers : [];
-      box.innerHTML = '';
-      if (!list.length) {
-        box.innerHTML = '<div class="b-empty">\u041d\u0435\u0442 \u0432\u0435\u0440\u0441\u0438\u0439 \u0434\u043b\u044f ' + escapeHtml(CURRENT_BUILD.gameVersion) + (B_TYPE === 'mod' ? ' / ' + escapeHtml(CURRENT_BUILD.loader) : '') + '</div>';
-        return;
-      }
-      list.slice(0, 30).forEach(v => {
-        const f = (v.files || []).find(x => x.primary) || (v.files || [])[0];
-        const mb = f && f.size ? (f.size / 1048576).toFixed(1) + ' MB' : '';
-        const date = fmtDate(v.date_published);
-        const type = v.version_type ? (v.version_type.charAt(0).toUpperCase() + v.version_type.slice(1)) : '';
-        const gvs = (v.game_versions || []).slice(0, 3).join(', ') + ((v.game_versions || []).length > 3 ? '...' : '');
-        // подсветка версии, нужной по диагнозу
-        const matches = hl && hl.needVersion && versionMatchesRange(v.version_number, hl.needVersion);
-        const row = document.createElement('div');
-        row.className = 'b-mod b-ver-row' + (matches ? ' hl' : '');
-        row.innerHTML = `
-          <div style="display:flex;flex-direction:column;gap:3px;min-width:0">
-            <div class="bm-name">${escapeHtml(gvs)} &middot; ${escapeHtml((v.loaders || []).join('/'))} ${matches ? '<span class="b-tag" style="color:#4db8ff">\u2713 \u041d\u0443\u0436\u043d\u0430\u044f</span>' : ''}</div>
-            <div class="bm-meta">${type ? escapeHtml(type) + ' &middot; ' : ''}${date}${mb ? ' &middot; ' + mb : ''}</div>
-          </div>
-          <div style="display:flex;flex-direction:column;gap:4px;margin-top:2px">
-            <button class="b-mini play" data-dep="0" style="width:100%">\u0423\u0441\u0442\u0430\u043d\u043e\u0432\u0438\u0442\u044c</button>
-            <button class="b-mini" data-dep="1" style="width:100%">\u0421 \u0437\u0430\u0432\u0438\u0441\u0438\u043c\u043e\u0441\u0442\u044f\u043c\u0438</button>
-          </div>`;
-        row.querySelector('[data-dep="0"]').addEventListener('click', () => doInstall(h, v, false));
-        row.querySelector('[data-dep="1"]').addEventListener('click', () => doInstall(h, v, true));
-        box.appendChild(row);
-      });
-    }).catch(err => {
-      box.innerHTML = '<div class="b-empty">\u041e\u0448\u0438\u0431\u043a\u0430: ' + escapeHtml(err.message || err) + '</div>';
-    });
+    renderModVersions(box, h, hl || null);
   }
 
   function doInstall(h, version, withDeps) {
@@ -1524,6 +1704,7 @@
       .then(r => {
         setStatus('УСТАНОВЛЕНО: ' + (r.count || 1) + ' ФАЙЛ(ОВ)', '');
         hideProgress();
+        afterModInstalled(h, versionId);
         refreshBuilds();
       })
       .catch(err => {
@@ -1532,7 +1713,33 @@
       });
   }
 
+  // После установки: плавно золото -> зелёный -> обычная на нужной версии,
+  // затем пересчёт требований (зависимость установлена — подсветка уходит)
+  function afterModInstalled(h, versionId) {
+    if ($('#mVers')) {
+      const rows = versionId
+        ? Array.from(document.querySelectorAll('#mVers [data-vid="' + CSS.escape(versionId) + '"]'))
+        : Array.from(document.querySelectorAll('#mVers .b-ver-row.hl'));
+      rows.forEach(row => {
+        row.classList.add('req-done');
+        setTimeout(() => row.classList.remove('hl', 'req', 'req-done'), 1800);
+      });
+    }
+    if (OPEN_MOD) OPEN_MOD.hl = null;
+    invalidateReqs();
+    setTimeout(() => {
+      reqsPromise().then(() => {
+        if (OPEN_MOD && $('#mVers')) renderModVersions($('#mVers'), OPEN_MOD.h, OPEN_MOD.hl);
+      });
+    }, 2000);
+  }
+
+  let _upLast = 0;
   function updateProgress(p) {
+    // троттлинг: не чаще 100 мс — частые IPC-события прогресса не перегружают layout
+    const now = performance.now();
+    if (now - _upLast < 100) return;
+    _upLast = now;
     const box = $('#bProgress');
     if (!box) return;
     box.classList.remove('hidden');
@@ -1602,34 +1809,94 @@
   }
 
   if ($('#bNewBtn')) {
+    let instSearchT = null;
     $('#bNewBtn').addEventListener('click', openCreateModal);
     $('#bSearchBtn').addEventListener('click', () => { B_OFFSET = 0; refreshCatalog(); });
-    $('#bInstSearch').addEventListener('input', (e) => { INST_QUERY = e.target.value.trim().toLowerCase(); renderInstalled(); });
+    $('#bInstSearch').addEventListener('input', (e) => {
+      clearTimeout(instSearchT);
+      instSearchT = setTimeout(() => { INST_QUERY = e.target.value.trim().toLowerCase(); renderInstalled(); }, 180);
+    });
     $('#bSearch').addEventListener('keydown', (e) => { if (e.key === 'Enter') { B_OFFSET = 0; refreshCatalog(); } });
     $('#bPrev').addEventListener('click', () => { if (B_OFFSET >= 25) { B_OFFSET -= 25; refreshCatalog(); } });
     $('#bNext').addEventListener('click', () => { B_OFFSET += 25; refreshCatalog(); });
-    api.on('builds:changed', () => refreshBuilds());
+    let bcTimer = null;
+    api.on('builds:changed', () => {
+      // дебаунс: серия событий (установка/удаление) → один пересчёт
+      clearTimeout(bcTimer);
+      bcTimer = setTimeout(() => {
+        invalidateReqs();
+        refreshBuilds().then(() => {
+          if (OPEN_MOD && $('#mVers')) renderModVersions($('#mVers'), OPEN_MOD.h, OPEN_MOD.hl);
+        });
+      }, 150);
+    });
     api.on('mod:progress', (p) => updateProgress(p));
     api.on('builds:progress', (p) => updateProgress(p));
   }
 
   /* ===== Инициализация ===== */
+  // Режим «Экономия»: единый выключатель всего декоративного
+  function applyEco() {
+    document.documentElement.classList.toggle('eco', !!settingsCache.economy);
+    if (driftCtl) {
+      if (settingsCache.economy) driftCtl.stop(); else driftCtl.start();
+    }
+  }
+
+  // Лёгкая самодиагностика: замер FPS ~1.5с, при низком FPS предложим экономию
+  function measureFps(duration) {
+    return new Promise(resolve => {
+      let frames = 0;
+      const start = performance.now();
+      const loop = () => {
+        frames++;
+        const now = performance.now();
+        if (now - start >= (duration || 1500)) {
+          resolve(frames / ((now - start) / 1000));
+          return;
+        }
+        requestAnimationFrame(loop);
+      };
+      requestAnimationFrame(loop);
+    });
+  }
+
   function setupPanoParallax() {
     const pv = document.getElementById('versionPreview');
     if (!pv) return;
-    let ox = 0, oy = 0, drift = 0, last = performance.now(), timer = 0;
-    function tick() {
-      // пауза, когда окно скрыто/свёрнуто или вкладка не активна — CPU в фоне ~0
-      if (!document.hidden && pv.offsetParent !== null) {
+    // Панорама на отдельном GPU-слое: анимируем transform, а не background-position
+    const baseBg = getComputedStyle(pv).background;
+    const bg = document.createElement('div');
+    bg.className = 'vp-bg';
+    const syncBg = () => {
+      if (pv.classList.contains('modded')) {
+        bg.style.background = 'linear-gradient(180deg, hsla(0,0%,0%,.35), hsla(0,0%,0%,.6)), var(--mc-grey-6)';
+      } else {
+        bg.style.background = baseBg;
+      }
+    };
+    syncBg();
+    pv.classList.add('vp-strip');
+    pv.appendChild(bg);
+    const obs = new MutationObserver(syncBg);
+    obs.observe(pv, { attributes: true, attributeFilter: ['class'] });
+    let ox = 0, oy = 0, drift = 0, last = performance.now(), timer = 0, running = false;
+    const tick = () => {
+      // пауза: окно скрыто/свёрнуто, неактивно или включена экономия — CPU в фоне ~0
+      if (running && !settingsCache.economy && !document.hidden && document.hasFocus() && pv.offsetParent !== null) {
         const now = performance.now();
         const dt = Math.min((now - last) / 1000, .1);
         last = now;
         drift += 8 * dt;
-        pv.style.backgroundPositionX = (-(drift % 256) + ox).toFixed(2) + 'px';
-        pv.style.backgroundPositionY = oy.toFixed(2) + 'px';
+        bg.style.transform = 'translate3d(' + (-(drift % 256) + ox).toFixed(2) + 'px,' + oy.toFixed(2) + 'px,0)';
       }
-      timer = setTimeout(tick, 100); // 10 Гц — медленный дрифт, глазу не отличить от 60fps
-    }
+      if (running) timer = setTimeout(tick, 100); // 10 Гц — дрейф медленный, глазу не отличить
+    };
+    const ctl = {
+      start() { if (running) return; running = true; last = performance.now(); timer = setTimeout(tick, 100); },
+      stop() { running = false; clearTimeout(timer); }
+    };
+    driftCtl = ctl;
     pv.addEventListener('mousemove', e => {
       const r = pv.getBoundingClientRect();
       const dx = (e.clientX - r.left) / r.width - .5;
@@ -1638,13 +1905,15 @@
       oy = dy * -16;
     });
     pv.addEventListener('mouseleave', () => { ox = 0; oy = 0; });
-    timer = setTimeout(tick, 100);
+    if (!settingsCache.economy) ctl.start();
   }
 
   function init() {
-    // Окно скрыто/свернуто → пауза всем CSS-анимациям (экономия CPU в фоне)
-    const togglePaused = () => document.documentElement.classList.toggle('anim-paused', document.hidden);
+    // Окно скрыто/свернуто/неактивно → пауза всем CSS-анимациям (экономия CPU в фоне)
+    const togglePaused = () => document.documentElement.classList.toggle('anim-paused', document.hidden || !document.hasFocus());
     document.addEventListener('visibilitychange', togglePaused);
+    window.addEventListener('blur', togglePaused);
+    window.addEventListener('focus', togglePaused);
     togglePaused();
     setupPanoParallax();
     buildMods();
@@ -1652,20 +1921,45 @@
       if (s) {
         settingsCache = { ...settingsCache, ...s };
         applyTheme();
+        applyEco();
         showBuildsTab(!!settingsCache.experimental);
         const acc = $('#topAccent');
         if (acc) acc.textContent = 'Аккаунт: ' + settingsCache.username + ' \u00b7 offline';
         buildSettingsPanel();
       }
     }).catch(() => buildSettingsPanel());
+    // Программный рендер (нет GPU-ускорения) → включаем экономию автоматически
+    api.invoke('system:gpu').then(g => {
+      if (g && g.software && !settingsCache.economy) {
+        settingsCache.economy = true;
+        api.invoke('settings:set', 'economy', true).catch(() => {});
+        applyEco();
+        buildSettingsPanel();
+        mcToast('GPU-УСКОРЕНИЕ НЕДОСТУПНО — ВКЛЮЧЕНА ЭКОНОМИЯ CPU');
+      }
+    }).catch(() => {});
 
     buildTypeButtons();
     refreshBuilds();
     api.invoke('update:check').then(u => { if (u && u.version) showUpdateModal(u); });
-    setTimeout(() => { if (!BUILD_LIST.length) refreshCatalog(); }, 1500);
+    // Статус последнего запуска обновления: успех или причина ошибки
+    api.invoke('update:status').then(s => {
+      if (s && s.error) showToast('ОШИБКА ОБНОВЛЕНИЯ: ' + String(s.error).slice(0, 220), true);
+      else if (s && s.ok) showToast('ЛАУНЧЕР УСПЕШНО ОБНОВЛЁН', false);
+    }).catch(() => {});
+    setTimeout(() => refreshCatalog(), 1500);
 api.invoke('favs:list').then(f => { FAVS = Array.isArray(f) ? f : []; applyFavsToCards(); }).catch(() => {});
     // Если после прошлого краша остался необработанный диагноз — напомним
     api.invoke('diagnosis:pending').then(r => { if (r) setTimeout(() => showDiagnostics(r), 1200); }).catch(() => {});
+    // Самодиагностика: через 4с замеряем FPS, при низком — предлагаем экономию
+    setTimeout(() => {
+      if (settingsCache.economy) return;
+      measureFps(1500).then(fps => {
+        if (fps < 45 && settingsCache.economy !== true) {
+          mcToast('НИЗКИЙ FPS (' + Math.round(fps) + ') — ВКЛЮЧИТЕ ЭКОНОМИЮ CPU В НАСТРОЙКАХ');
+        }
+      });
+    }, 4000);
     api.invoke('versions:list').then(list => {
       if (Array.isArray(list) && list.length) {
         VERSION_LIST = list;

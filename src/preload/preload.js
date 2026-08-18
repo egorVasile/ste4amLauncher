@@ -22,6 +22,7 @@ const INVOKE = [
   'builds:create',
   'builds:delete',
   'builds:installed',
+  'builds:registry',
   'builds:install-mod',
   'builds:delete-mod',
   'builds:update-mod',
@@ -46,6 +47,7 @@ const INVOKE = [
   'favs:remove',
   'update:check',
   'update:now',
+  'update:status',
   'dialog:saveFile',
   'dialog:openFile'
 ];
