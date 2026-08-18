@@ -2,68 +2,68 @@
     "npmInstall":  false,
     "files":  [
                   {
-                      "path":  "src\\main\\diag.js",
-                      "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src\\main\\diag.js",
+                      "path":  "src/main/diag.js",
+                      "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/main/diag.js",
                       "sha256":  "d2d1c21c9b0f15aee35a3a79bdb63a082adb51a41449aa396a0ab89d5d558ab8"
                   },
                   {
-                      "path":  "src\\main\\launcher.js",
-                      "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src\\main\\launcher.js",
+                      "path":  "src/main/launcher.js",
+                      "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/main/launcher.js",
                       "sha256":  "6b4cef10c03b1dad7c5a9a8970b0f3e215e7c3483f42fc948b6e69f2ee50dd0b"
                   },
                   {
-                      "path":  "src\\main\\main.js",
-                      "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src\\main\\main.js",
+                      "path":  "src/main/main.js",
+                      "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/main/main.js",
                       "sha256":  "32ff01e2b440d5b9ac32674176aed9f8eb9a66d836fba1807e4bd19b159eb2ee"
                   },
                   {
-                      "path":  "src\\main\\mods.js",
-                      "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src\\main\\mods.js",
+                      "path":  "src/main/mods.js",
+                      "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/main/mods.js",
                       "sha256":  "8b36793f0ebf8bf071d8a45f75c8323a95f01b42bcf3c07f75fc3b344a500c18"
                   },
                   {
-                      "path":  "src\\main\\store.js",
-                      "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src\\main\\store.js",
+                      "path":  "src/main/store.js",
+                      "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/main/store.js",
                       "sha256":  "ed1e63a124855ad828ff5aa73c09d8dc906594a313a6c77f7f388b08a92a8234"
                   },
                   {
-                      "path":  "src\\main\\update.js",
-                      "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src\\main\\update.js",
+                      "path":  "src/main/update.js",
+                      "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/main/update.js",
                       "sha256":  "9b932d6382aae663e49fcb5413ab4bedd86c1767b17806bffcf255b947cb08e6"
                   },
                   {
-                      "path":  "src\\preload\\preload.js",
-                      "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src\\preload\\preload.js",
+                      "path":  "src/preload/preload.js",
+                      "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/preload/preload.js",
                       "sha256":  "bba58cc6cf0a6244f3ee3234c68b6a8f5a1d6f8eaf4a2735d3aa34f8ea6f7129"
                   },
                   {
-                      "path":  "src\\renderer\\app.js",
-                      "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src\\renderer\\app.js",
+                      "path":  "src/renderer/app.js",
+                      "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/renderer/app.js",
                       "sha256":  "2f3f1024e9546e084587a312faf1bd4f2c4ae2b206218ea1a5d8fb8cd1f156cb"
                   },
                   {
-                      "path":  "src\\renderer\\icon.png",
-                      "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src\\renderer\\icon.png",
+                      "path":  "src/renderer/icon.png",
+                      "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/renderer/icon.png",
                       "sha256":  "ab59ff872197a0f22e9214480447e68b5af02d309ca94c47b17adfc6b688d687"
                   },
                   {
-                      "path":  "src\\renderer\\icons.js",
-                      "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src\\renderer\\icons.js",
+                      "path":  "src/renderer/icons.js",
+                      "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/renderer/icons.js",
                       "sha256":  "a979ba1fc825a1619e1fc6bf443ecfe008b20031ad1a5e7db7638017c5f2095e"
                   },
                   {
-                      "path":  "src\\renderer\\index.html",
-                      "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src\\renderer\\index.html",
+                      "path":  "src/renderer/index.html",
+                      "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/renderer/index.html",
                       "sha256":  "61c4b4c339ab7c8605ecf74363c2c748ab317f8c8e595359f758bb9f0a07e602"
                   },
                   {
-                      "path":  "src\\renderer\\fonts\\MinecraftSeven.woff2",
-                      "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src\\renderer\\fonts\\MinecraftSeven.woff2",
+                      "path":  "src/renderer/fonts/MinecraftSeven.woff2",
+                      "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/renderer/fonts/MinecraftSeven.woff2",
                       "sha256":  "b2840d23454bc5cef67926850733b8b29b9bdd12a6fd75857c03aed7bbd2dc5d"
                   },
                   {
-                      "path":  "src\\renderer\\fonts\\MinecraftTenV2.woff2",
-                      "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src\\renderer\\fonts\\MinecraftTenV2.woff2",
+                      "path":  "src/renderer/fonts/MinecraftTenV2.woff2",
+                      "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/renderer/fonts/MinecraftTenV2.woff2",
                       "sha256":  "05c57067ecb4aba78fa6db6c422657c4d87191a9854a95a07e9620b300533551"
                   },
                   {
