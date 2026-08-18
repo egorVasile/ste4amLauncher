@@ -440,7 +440,7 @@
 
   /* ===== Кастомизация (0.2.8) ===== */
   const CUSTOM_DEFAULTS = {
-    skinUuid: '', skinNickname: '', skinModel: 'classic', skinTexture: '', skinCape: '',
+    skinUuid: '', skinNickname: '', skinModel: 'classic', skinTexture: '', skinCape: '', skinInGame: false,
     cardSize: 'md', cardLayout: 'default', hover: 'lift',
     cardAnim: true, accentEdges: true, galleryZoom: true
   };
@@ -2096,6 +2096,17 @@ function showUpdateModal(u) {
     if (hatEl) hatEl.addEventListener('change', drawPreview);
     if (backEl) backEl.addEventListener('change', drawPreview);
     if (capeEl) capeEl.addEventListener('change', drawPreview);
+    const inGameEl = $('#skinInGame');
+    if (inGameEl) inGameEl.addEventListener('change', () => {
+      c.skinInGame = inGameEl.checked;
+      const note = $('#skinNote');
+      if (note) note.style.display = inGameEl.checked ? '' : 'none';
+      if (inGameEl.checked && !c.skinNickname) {
+        msg.textContent = 'Сначала загрузите скин — ник игрока возьмётся из него';
+        msg.classList.add('err');
+      }
+      saveCustom(c);
+    });
 
     const loadBtn = $('#skinLoad');
     if (loadBtn) loadBtn.addEventListener('click', () => {
@@ -2163,7 +2174,9 @@ function showUpdateModal(u) {
                 <label><input type="checkbox" id="skinHat" checked/> Шапка</label>
                 <label><input type="checkbox" id="skinBack"/> Сзади</label>
                 <label><input type="checkbox" id="skinCape"/> Плащ</label>
+                <label><input type="checkbox" id="skinInGame"${c.skinInGame ? ' checked' : ''}/> Скин в игре</label>
               </div>
+              <div class="cust-skin-note" id="skinNote" style="display:${c.skinInGame ? '' : 'none'}">При запуске ник игрока будет заменён на ник скина, а в сборку автоматически установится CustomSkinLoader с ely.by.</div>
               <button class="secondary-btn" id="skinClear" style="align-self:flex-start">СБРОСИТЬ СКИН</button>
             </div>
           </div>

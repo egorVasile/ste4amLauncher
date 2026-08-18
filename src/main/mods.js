@@ -814,6 +814,36 @@ async function installProject({ buildId, project, versionId, withDeps, type = 'm
   return { installed, count: queue.length };
 }
 
+/* ============ Скин в игре: CustomSkinLoader + ely.by ============ */
+// Ставит CSL (из Modrinth) в mods/ сборки и кладёт ExtraList с ely.by.
+// ExtraList-файл CSL добавляет источник В НАЧАЛО списка (приоритет над Mojang).
+// Ошибки не бросает: если что-то не вышло, игра всё равно запустится.
+async function ensureSkinMod(build) {
+  const gameDir = path.join(buildDir(build.id), 'game');
+  const modDir = path.join(gameDir, 'mods');
+  const cslDir = path.join(gameDir, 'CustomSkinLoader', 'ExtraList');
+  await fsp.mkdir(modDir, { recursive: true });
+  await fsp.mkdir(cslDir, { recursive: true });
+  // Один SkinSiteProfile на файл (формат CSL ExtraList)
+  const extra = { name: 'Ely.by', type: 'ElyByAPI', root: 'https://skinsystem.ely.by/' };
+  await fsp.writeFile(path.join(cslDir, 'ElyBy.json'), JSON.stringify(extra, null, 2), 'utf8');
+  // CSL уже установлен в сборку?
+  try {
+    if (fs.readdirSync(modDir).some(f => /customskinloader/i.test(f))) return { csl: false, extra: true };
+  } catch (e) { /* нет папки */ }
+  // Без лоадера (vanilla) мод ставить некуда — скин показывается только в модных сборках
+  const loader = String(build.loader || '').toLowerCase();
+  if (!loader) return { csl: false, extra: true };
+  const vers = await mrProjectVersions('customskinloader', build.gameVersion, loader);
+  const v = (Array.isArray(vers) ? vers : [])[0];
+  if (!v || !v.files || !v.files[0]) return { csl: false, extra: true };
+  const f = v.files.find(x => x.primary) || v.files[0];
+  const dest = path.join(modDir, f.filename);
+  if (fs.existsSync(dest) && fs.statSync(dest).size === f.size) return { csl: false, extra: true };
+  await downloadFile(f.url, dest, () => {});
+  return { csl: true, extra: true };
+}
+
 async function deleteMod(buildId, filename, type) {
   const dir = (type && type !== 'mod') ? packsDir(buildId, type) : modsDir(buildId);
   const p = path.join(dir, path.basename(filename));
@@ -1381,5 +1411,6 @@ module.exports = {
   exportBuild, importBuild, findModrinthByHash, packConfigs, unpackConfigs,
   findJava, findJavaMajor, javaCandidates, javaMajor, ensureJavaRuntime,
   modsDir, packsDir, buildDir, loadBuilds,
+  ensureSkinMod,
   fetchNews, favsList, favsAdd, favsRemove
 };

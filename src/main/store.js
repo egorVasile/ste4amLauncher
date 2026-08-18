@@ -25,6 +25,7 @@ const DEFAULTS = {
     skinModel: 'classic',    // classic | slim (определяется из текстуры)
     skinTexture: '',         // data:image/png;base64,... (для превью)
     skinCape: '',            // data:image/png;base64,... | ''
+    skinInGame: false,       // скин в игре (CustomSkinLoader + ely.by)
     cardSize: 'md',          // 'sm' | 'md' | 'lg' — высота карточек
     cardLayout: 'default',   // 'default' | 'center' — раскладка страницы мода
     hover: 'lift',           // 'lift' | 'glow' | 'none' — эффект при наведении

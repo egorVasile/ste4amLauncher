@@ -199,10 +199,23 @@ function registerIpc() {
     store.set('ram', safeRam);
     const resW = parseInt(opts && opts.width, 10);
     const resH = parseInt(opts && opts.height, 10);
+    // Скин в игре: если включено — ник в игре = ник скина, а в сборку
+    // автоматически ставится CustomSkinLoader с ely.by (не блокирует запуск)
+    const custom = store.get('custom') || {};
+    let gameUsername = store.get('username');
+    if (custom.skinInGame && custom.skinNickname) gameUsername = custom.skinNickname;
+    if (custom.skinInGame && typeof opts.buildId === 'string') {
+      try {
+        const build = (await mods.loadBuilds()).find(b => b.id === opts.buildId);
+        if (build) await mods.ensureSkinMod(build);
+      } catch (e) {
+        console.error('[skin-in-game]', e && e.message);
+      }
+    }
     try {
       const pid = await launcher.launchVersion({
         version,
-        username: store.get('username'),
+        username: gameUsername,
         ram: safeRam,
         accessToken: '0',
         uuid: null,

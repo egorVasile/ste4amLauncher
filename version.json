@@ -14,17 +14,17 @@
         {
             "path": "src/main/main.js",
             "url": "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/main/main.js",
-            "sha256": "fa7b1818738ee1bcc32b793011bbe764529ced41a20fe50c90157022ef33c215"
+            "sha256": "fa42107c2d85e2a3c9d839487cd1a2fef5d7c1e4239b9bafcfa75ca25d481f01"
         },
         {
             "path": "src/main/mods.js",
             "url": "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/main/mods.js",
-            "sha256": "8b36793f0ebf8bf071d8a45f75c8323a95f01b42bcf3c07f75fc3b344a500c18"
+            "sha256": "3366059f706860ce1c065cf84069f0deefa3631ce59b1bc47ba47aaa5db0e9d2"
         },
         {
             "path": "src/main/store.js",
             "url": "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/main/store.js",
-            "sha256": "e309156a910e4efcb35851bb531ec5a6a1122c0b5584ad870abd370f2b98a6c5"
+            "sha256": "69af5af7eaf68b0bd3ccb4590011d3fd6d6625683ab2d84843e38b7854a5aa0e"
         },
         {
             "path": "src/main/update.js",
@@ -39,7 +39,7 @@
         {
             "path": "src/renderer/app.js",
             "url": "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/renderer/app.js",
-            "sha256": "f6176daf2583cfed21b06198782f86ef1a3663ea0e7f0e51164ab809ff0bc2ea"
+            "sha256": "b1337b62e1fece1eb621528942a7b4f29667f3030ae59939e568f7ac247b678c"
         },
         {
             "path": "src/renderer/icon.png",
@@ -54,7 +54,7 @@
         {
             "path": "src/renderer/index.html",
             "url": "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/renderer/index.html",
-            "sha256": "ee11490ef1db0455d96f7b3011c954a969ed0651e6220fba7b0c696e5f1b8ead"
+            "sha256": "62a8cad01386d7629b67718b82ed40450888fbcbf97106f5bf2d2abf82f5864f"
         },
         {
             "path": "src/renderer/skins.js",
@@ -74,7 +74,7 @@
         {
             "path": "package.json",
             "url": "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/package.json",
-            "sha256": "4cf432563cca70f85c83543d0939069a5d399ffa23e5c4ebdbce3027e6e49282"
+            "sha256": "8a5a9992d7f0dc41365e6cc18d2beb9a538ed35437109345ad26aa02c3ec577b"
         },
         {
             "path": "updater.js",
@@ -82,5 +82,5 @@
             "sha256": "3c1a8f6b15977a98605055418d18eeae610da9969e2d82695efa3841eab77947"
         }
     ],
-    "version": "0.2.8"
+    "version": "0.2.9"
 }
