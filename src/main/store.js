@@ -17,7 +17,21 @@ const DEFAULTS = {
   mods: {},
   // Новая структура для аккаунтов
   accounts: [],
-  activeAccountId: null
+  activeAccountId: null,
+  // Кастомизация интерфейса (0.2.8)
+  custom: {
+    skinUuid: '',            // ID игрока в ely.by (резолвится из ника)
+    skinNickname: '',        // ник для превью скина
+    skinModel: 'classic',    // classic | slim (определяется из текстуры)
+    skinTexture: '',         // data:image/png;base64,... (для превью)
+    skinCape: '',            // data:image/png;base64,... | ''
+    cardSize: 'md',          // 'sm' | 'md' | 'lg' — высота карточек
+    cardLayout: 'default',   // 'default' | 'center' — раскладка страницы мода
+    hover: 'lift',           // 'lift' | 'glow' | 'none' — эффект при наведении
+    cardAnim: true,          // анимации карточек
+    accentEdges: true,       // цветные края/углы иконок
+    galleryZoom: true        // галерея на весь экран при долгом наведении
+  }
 };
 
 class Store {

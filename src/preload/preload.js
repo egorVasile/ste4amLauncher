@@ -40,6 +40,8 @@ const INVOKE = [
 
   'news:fetch',
 
+  'skin:fetch',
+
   'favs:list',
 
   'favs:add',

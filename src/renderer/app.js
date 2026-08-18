@@ -29,6 +29,7 @@
   let accentBusy = 0;
   const ACCENT_MAX = 4;
   function applyEdgeAccent(imgEl, targetEl) {
+    if (getCustom().accentEdges === false) return;
     const src = imgEl && imgEl.src;
     if (!src) return;
     if (ACCENT_CACHE[src] !== undefined) {
@@ -435,7 +436,35 @@
 
   /* ===== Настройки (реальные) ===== */
   const modal = $('#modalBackdrop');
-  let settingsCache = { username: 'Player', ram: 2, mirror: 'auto', theme: 'dark', totalRam: 8, width: '', height: '', launcherMode: 'keep', economy: false };
+  let settingsCache = { username: 'Player', ram: 2, mirror: 'auto', theme: 'dark', totalRam: 8, width: '', height: '', launcherMode: 'keep', economy: false, custom: null };
+
+  /* ===== Кастомизация (0.2.8) ===== */
+  const CUSTOM_DEFAULTS = {
+    skinUuid: '', skinNickname: '', skinModel: 'classic', skinTexture: '', skinCape: '',
+    cardSize: 'md', cardLayout: 'default', hover: 'lift',
+    cardAnim: true, accentEdges: true, galleryZoom: true
+  };
+  function getCustom() {
+    return { ...CUSTOM_DEFAULTS, ...(settingsCache.custom || {}) };
+  }
+  function saveCustom(c) {
+    const merged = { ...CUSTOM_DEFAULTS, ...(c || settingsCache.custom || {}) };
+    settingsCache.custom = merged;
+    api.invoke('settings:set', 'custom', merged).catch(() => {});
+    applyCustom();
+    return merged;
+  }
+  function applyCustom() {
+    const c = getCustom();
+    const root = document.documentElement;
+    root.classList.toggle('cust-sm', c.cardSize === 'sm');
+    root.classList.toggle('cust-lg', c.cardSize === 'lg');
+    root.classList.toggle('cust-hover-lift', c.hover === 'lift');
+    root.classList.toggle('cust-hover-glow', c.hover === 'glow');
+    root.classList.toggle('cust-hover-none', c.hover === 'none');
+    root.classList.toggle('cust-noanim', c.cardAnim === false);
+    root.classList.toggle('cust-noaccent', c.accentEdges === false);
+  }
 
   function safeRam(r) {
     const n = parseInt(r, 10);
@@ -450,6 +479,7 @@
       <div class="set-cat">ВНЕШНИЙ ВИД</div>
       <div class="set-row"><div><div class="s-label">ТЕМА</div><div class="s-desc">Официальная светлая или тёмная (как в лаунчере Mojang)</div></div>
       <div class="theme-seg" id="themeSeg"><button class="b-type-btn t-opt${settingsCache.theme === 'light' ? ' sel' : ''}" data-t="light">СВЕТЛАЯ</button><button class="b-type-btn t-opt${settingsCache.theme === 'dark' ? ' sel' : ''}" data-t="dark">ТЁМНАЯ</button><button class="b-type-btn t-opt${settingsCache.theme === 'system' ? ' sel' : ''}" data-t="system">СИСТЕМА</button></div></div>
+      <div class="set-row"><div><div class="s-label">КАСТОМИЗАЦИЯ</div><div class="s-desc">Скин профиля и оформление кнопок</div></div><button class="dropdown" style="padding:7px 12px;font-size:13px" id="custBtn">НАСТРОИТЬ</button></div>
       <div class="set-cat">ПРОФИЛЬ</div>
       <div class="set-row"><div><div class="s-label">ИМЯ (OFFLINE)</div><div class="s-desc">Ник для оффлайн-режима</div></div>
       <input type="text" id="nickInput" value="${escapeHtml(settingsCache.username)}" style="background:var(--mc-grey-5);border:2px solid var(--mc-off-black);color:var(--mc-off-white);padding:7px 10px;font-family:var(--mc-font);font-size:13px;width:180px;outline:none"/></div>
@@ -574,6 +604,8 @@
       applyTheme();
       setStatus('ТЕМА: ' + btn.dataset.t.toUpperCase(), '');
     });
+    const custBtn = $('#custBtn');
+    if (custBtn) custBtn.addEventListener('click', () => openCustModal());
     $('#expSw').addEventListener('click', () => {
       settingsCache.experimental = !settingsCache.experimental;
       $('#expSw').classList.toggle('on', settingsCache.experimental);
@@ -593,6 +625,9 @@
       api.invoke('settings:set', 'launcherMode', 'keep');
       api.invoke('settings:set', 'economy', false);
       applyEco();
+      settingsCache.custom = { ...CUSTOM_DEFAULTS };
+      api.invoke('settings:set', 'custom', settingsCache.custom);
+      applyCustom();
       $('#lmSeg').querySelectorAll('.t-opt').forEach(b => b.classList.toggle('sel', b.dataset.lm === 'keep'));
       const rW = $('#resW'), rH = $('#resH');
       if (rW) rW.value = '';
@@ -921,6 +956,14 @@
   const B_TYPES = [['mod', 'МОДЫ'], ['resourcepack', 'РЕСУРСПАКИ'], ['shaderpack', 'ШЕЙДЕРЫ'], ['datapack', 'ДАТАПАКИ']];
   let B_TYPE = 'mod';
   let INST_QUERY = '';
+
+  // Тип проекта для установки/поиска версий: у карточки из «Избранного» своя категория
+  // (btype/project_type), её нельзя заменять текущей вкладкой каталога (B_TYPE).
+  function itemType(h) {
+    let t = (h && (h.btype || h.project_type)) || B_TYPE;
+    if (t === 'shader') t = 'shaderpack'; // API Modrinth отдаёт 'shader', в приложении 'shaderpack'
+    return t;
+  }
 
   function refreshBuilds() {
     return api.invoke('builds:list').then(list => {
@@ -1362,7 +1405,7 @@
   function favCard(f) {
     const row = document.createElement('div');
     row.className = 'b-hit';
-    const h = { slug: f.slug, title: f.title, icon_url: f.icon_url, description: f.description, categories: f.categories, downloads: f.downloads || 0, project_type: f.project_type || '' };
+    const h = { slug: f.slug, title: f.title, icon_url: f.icon_url, description: f.description, categories: f.categories, downloads: f.downloads || 0, project_type: f.project_type || '', btype: itemType(f) };
     row.innerHTML = `
       <button class="b-fav on" data-slug="${escapeHtml(f.slug)}"></button>
       <img src="${f.icon_url || ''}" alt=""/>
@@ -1536,7 +1579,7 @@
       box.innerHTML = '<div class="b-empty">\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0441\u0431\u043e\u0440\u043a\u0443</div>';
       return;
     }
-    reqsPromise().then(reqs => api.invoke('modrinth:versions', h.slug, CURRENT_BUILD.gameVersion, B_TYPE === 'mod' ? CURRENT_BUILD.loader.toLowerCase() : null)
+    reqsPromise().then(reqs => api.invoke('modrinth:versions', h.slug, CURRENT_BUILD.gameVersion, itemType(h) === 'mod' ? CURRENT_BUILD.loader.toLowerCase() : null)
       .then(vers => {
         const list = Array.isArray(vers) ? vers : [];
         const pid = (list[0] && list[0].project_id) || null;
@@ -1545,7 +1588,7 @@
     ).then(({ list, needed }) => {
       box.innerHTML = '';
       if (!list.length) {
-        box.innerHTML = '<div class="b-empty">\u041d\u0435\u0442 \u0432\u0435\u0440\u0441\u0438\u0439 \u0434\u043b\u044f ' + escapeHtml(CURRENT_BUILD.gameVersion) + (B_TYPE === 'mod' ? ' / ' + escapeHtml(CURRENT_BUILD.loader) : '') + '</div>';
+        box.innerHTML = '<div class="b-empty">Нет версий для ' + escapeHtml(CURRENT_BUILD.gameVersion) + (itemType(h) === 'mod' ? ' / ' + escapeHtml(CURRENT_BUILD.loader) : '') + '</div>';
         return;
       }
       // требование «любая версия» (без диапазона) -> плашка над списком, не золотая подсветка
@@ -1624,6 +1667,7 @@
       </div>
     `, true);const mb2 = modal.querySelector('.modal');
     if (mb2) mb2.classList.add('wide');
+    if (getCustom().cardLayout === 'center' && mb2) mb2.classList.add('mp-cust-center');
     const fb = $('#mpFavBtn');
     if (fb) fb.addEventListener('click', () => toggleFav(h, fb));
     api.invoke('modrinth:project', h.slug).then(p => {
@@ -1646,6 +1690,20 @@
           g.style.display = '';
           const main = $('#mpMain');
           main.src = imgs[0];
+          // Галерея на весь экран: долгое наведение на фото (кастомизация)
+          let gzTimer = 0;
+          const openLightbox = (src) => {
+            const lb = document.createElement('div');
+            lb.className = 'cust-lightbox';
+            lb.innerHTML = '<img src="' + src + '" alt=""/><div class="lb-x">&#10005;</div>';
+            lb.addEventListener('click', () => lb.remove());
+            document.body.appendChild(lb);
+          };
+          main.addEventListener('mouseenter', () => {
+            if (!getCustom().galleryZoom || !main.src) return;
+            gzTimer = setTimeout(() => openLightbox(main.src), 600);
+          });
+          main.addEventListener('mouseleave', () => clearTimeout(gzTimer));
           const th = $('#mpThumbs');
           imgs.forEach((u, i) => {
             const t = document.createElement('img');
@@ -1700,7 +1758,7 @@
     if (!CURRENT_BUILD) return;
     setStatus('УСТАНОВКА: ' + h.title.toUpperCase(), 'busy');
     updateProgress({ name: h.title, frac: 0 });
-    api.invoke('builds:install-mod', { buildId: CURRENT_BUILD.id, project: h.slug, versionId, withDeps, type: B_TYPE })
+    api.invoke('builds:install-mod', { buildId: CURRENT_BUILD.id, project: h.slug, versionId, withDeps, type: itemType(h) })
       .then(r => {
         setStatus('УСТАНОВЛЕНО: ' + (r.count || 1) + ' ФАЙЛ(ОВ)', '');
         hideProgress();
@@ -1922,6 +1980,7 @@
         settingsCache = { ...settingsCache, ...s };
         applyTheme();
         applyEco();
+        applyCustom();
         showBuildsTab(!!settingsCache.experimental);
         const acc = $('#topAccent');
         if (acc) acc.textContent = 'Аккаунт: ' + settingsCache.username + ' \u00b7 offline';
@@ -2006,6 +2065,180 @@ function showUpdateModal(u) {
     });
     const no = $('#updNo');
     if (no) no.addEventListener('click', () => $('#modalBackdrop').classList.remove('show'));
+  }
+
+  /* ===== Модалка кастомизации (0.2.8) ===== */
+  function initSkinPanel(c) {
+    const canvas = $('#skinCanvas');
+    const msg = $('#skinMsg');
+    const modelLbl = $('#skinModel');
+    const nick = $('#skinNick');
+    let skinTexture = c.skinTexture || '';
+    let skinCape = c.skinCape || '';
+    let model = c.skinModel || 'classic';
+
+    const drawPreview = () => {
+      const ctx = canvas.getContext('2d');
+      if (!skinTexture) {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = 'rgba(0,0,0,.35)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        if (modelLbl) modelLbl.textContent = '—';
+        return;
+      }
+      if (modelLbl) modelLbl.textContent = model === 'slim' ? 'СЛИМ' : 'КЛАССИЧЕСКИЙ';
+      const hat = $('#skinHat') ? $('#skinHat').checked : true;
+      const back = $('#skinBack') ? $('#skinBack').checked : false;
+      const cape = ($('#skinCape') && $('#skinCape').checked) ? skinCape : '';
+      window.SkinRenderer.render(canvas, skinTexture, { slim: model === 'slim', back, hat, cape }).catch(() => {});
+    };
+    const hatEl = $('#skinHat'), backEl = $('#skinBack'), capeEl = $('#skinCape');
+    if (hatEl) hatEl.addEventListener('change', drawPreview);
+    if (backEl) backEl.addEventListener('change', drawPreview);
+    if (capeEl) capeEl.addEventListener('change', drawPreview);
+
+    const loadBtn = $('#skinLoad');
+    if (loadBtn) loadBtn.addEventListener('click', () => {
+      const n = (nick ? nick.value : '').trim();
+      if (!n) { msg.textContent = 'Укажите ник игрока'; msg.classList.add('err'); return; }
+      msg.textContent = 'ЗАГРУЗКА...';
+      msg.classList.remove('err');
+      api.invoke('skin:fetch', n).then(r => {
+        if (r && r.ok) {
+          skinTexture = r.texture;
+          skinCape = r.cape || '';
+          model = r.model || 'classic';
+          c.skinNickname = n;
+          c.skinUuid = r.uuid || '';
+          c.skinTexture = skinTexture;
+          c.skinCape = skinCape;
+          c.skinModel = model;
+          saveCustom(c);
+          msg.textContent = 'СКИН ЗАГРУЖЕН (ID: ' + (r.uuid || '—').slice(0, 8) + ')';
+          msg.classList.remove('err');
+          drawPreview();
+        } else {
+          msg.textContent = (r && r.error) || 'ОШИБКА';
+          msg.classList.add('err');
+        }
+      }).catch(() => { msg.textContent = 'ОШИБКА СЕТИ'; msg.classList.add('err'); });
+    });
+
+    const clearBtn = $('#skinClear');
+    if (clearBtn) clearBtn.addEventListener('click', () => {
+      skinTexture = ''; skinCape = ''; model = 'classic';
+      c.skinNickname = ''; c.skinUuid = ''; c.skinTexture = ''; c.skinCape = ''; c.skinModel = 'classic';
+      if (nick) nick.value = '';
+      saveCustom(c);
+      msg.textContent = '';
+      msg.classList.remove('err');
+      drawPreview();
+    });
+
+    drawPreview();
+  }
+
+  function openCustModal() {
+    const c = getCustom();
+    openModal('КАСТОМИЗАЦИЯ', `
+      <div class="cust-modal">
+        <div class="cust-tabs">
+          <button class="cust-tab sel" data-tab="profile">КАСТОМИЗИРОВАТЬ ПРОФИЛЬ</button>
+          <button class="cust-tab" data-tab="buttons">КАСТОМИЗИРОВАТЬ КНОПКИ</button>
+        </div>
+        <div class="cust-pane" data-pane="profile">
+          <div class="cust-profile">
+            <div class="cust-skin-box">
+              <canvas id="skinCanvas" width="132" height="150"></canvas>
+              <div class="cust-skin-model" id="skinModel">&mdash;</div>
+            </div>
+            <div class="cust-profile-right">
+              <div class="cust-h">ВВЕДИТЕ НИК ИГРОКА (ELY.BY)</div>
+              <div class="cust-nick-line">
+                <input type="text" id="skinNick" placeholder="Ник игрока" value="${escapeHtml(c.skinNickname)}"/>
+                <button class="play-btn" id="skinLoad">ЗАГРУЗИТЬ</button>
+              </div>
+              <div class="cust-skin-msg" id="skinMsg"></div>
+              <div class="cust-skin-opts">
+                <label><input type="checkbox" id="skinHat" checked/> Шапка</label>
+                <label><input type="checkbox" id="skinBack"/> Сзади</label>
+                <label><input type="checkbox" id="skinCape"/> Плащ</label>
+              </div>
+              <button class="secondary-btn" id="skinClear" style="align-self:flex-start">СБРОСИТЬ СКИН</button>
+            </div>
+          </div>
+        </div>
+        <div class="cust-pane" data-pane="buttons" style="display:none">
+          <div class="cust-h">РАЗМЕР КАРТОЧЕК</div>
+          <div class="cust-seg" id="custSizeSeg">
+            <button data-size="sm">МАЛЕНЬКИЕ</button>
+            <button data-size="md"${c.cardSize === 'md' ? ' class="sel"' : ''}>СРЕДНИЕ</button>
+            <button data-size="lg">БОЛЬШИЕ</button>
+          </div>
+          <div class="cust-h">РАСКЛАДКА СТРАНИЦЫ МОДА</div>
+          <div class="cust-seg" id="custLayoutSeg">
+            <button data-layout="default"${c.cardLayout === 'default' ? ' class="sel"' : ''}>СТАНДАРТНАЯ</button>
+            <button data-layout="center">ФОТО ПО ЦЕНТРУ</button>
+          </div>
+          <div class="cust-h">ЭФФЕКТ ПРИ НАВЕДЕНИИ</div>
+          <div class="cust-seg" id="custHoverSeg">
+            <button data-hover="lift"${c.hover === 'lift' ? ' class="sel"' : ''}>ПОДЪЁМ</button>
+            <button data-hover="glow">СВЕЧЕНИЕ</button>
+            <button data-hover="none">БЕЗ ЭФФЕКТА</button>
+          </div>
+          <div class="set-row"><div><div class="s-label">АНИМАЦИИ КАРТОЧЕК</div><div class="s-desc">Появление и переходы карточек</div></div><div class="switch ${c.cardAnim ? 'on' : ''}" id="custAnim"></div></div>
+          <div class="set-row"><div><div class="s-label">ЦВЕТНЫЕ КРАЯ ИКОНОК</div><div class="s-desc">Акцентная рамка по цвету иконки</div></div><div class="switch ${c.accentEdges ? 'on' : ''}" id="custAccent"></div></div>
+          <div class="set-row"><div><div class="s-label">ГАЛЕРЕЯ НА ВЕСЬ ЭКРАН</div><div class="s-desc">Долгое наведение на фото мода</div></div><div class="switch ${c.galleryZoom ? 'on' : ''}" id="custZoom"></div></div>
+          <button class="secondary-btn" id="custReset" style="align-self:flex-start">СБРОСИТЬ КНОПКИ</button>
+        </div>
+      </div>
+    `, false);
+
+    $$('.cust-tab').forEach(tab => tab.addEventListener('click', () => {
+      $$('.cust-tab').forEach(t => t.classList.toggle('sel', t === tab));
+      $$('.cust-pane').forEach(p => { p.style.display = p.dataset.pane === tab.dataset.tab ? '' : 'none'; });
+    }));
+
+    initSkinPanel(c);
+
+    const seg = (id, key, valKey) => {
+      const el = $(id);
+      if (!el) return;
+      el.addEventListener('click', (e) => {
+        const btn = e.target.closest('button');
+        if (!btn) return;
+        const val = btn.dataset[valKey];
+        c[key] = val;
+        el.querySelectorAll('button').forEach(b => b.classList.toggle('sel', b.dataset[valKey] === val));
+        saveCustom(c);
+        setStatus('НАСТРОЙКИ КНОПОК СОХРАНЕНЫ', '');
+      });
+    };
+    seg('#custSizeSeg', 'cardSize', 'size');
+    seg('#custLayoutSeg', 'cardLayout', 'layout');
+    seg('#custHoverSeg', 'hover', 'hover');
+
+    const sw = (id, key) => {
+      const el = $(id);
+      if (!el) return;
+      el.addEventListener('click', () => {
+        c[key] = !c[key];
+        el.classList.toggle('on', c[key]);
+        saveCustom(c);
+        setStatus((c[key] ? 'ВКЛ: ' : 'ВЫКЛ: ') + key.toUpperCase(), '');
+      });
+    };
+    sw('#custAnim', 'cardAnim');
+    sw('#custAccent', 'accentEdges');
+    sw('#custZoom', 'galleryZoom');
+
+    const resetBtns = $('#custReset');
+    if (resetBtns) resetBtns.addEventListener('click', () => {
+      c.cardSize = 'md'; c.cardLayout = 'default'; c.hover = 'lift';
+      c.cardAnim = true; c.accentEdges = true; c.galleryZoom = true;
+      saveCustom(c);
+      openCustModal();
+    });
   }
 
   init();

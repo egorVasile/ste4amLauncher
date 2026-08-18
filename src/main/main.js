@@ -103,11 +103,13 @@ function registerIpc() {
     closeLauncherOnGame: store.get('closeLauncherOnGame'),
     showOldVersions: store.get('showOldVersions'),
     experimental: store.get('experimental'),
-    theme: store.get('theme')
+    theme: store.get('theme'),
+    custom: store.get('custom'),
+    economy: store.get('economy')
   }));
 
   ipcMain.handle('settings:set', (_e, key, value) => {
-    const allowed = ['username', 'ram', 'mirror', 'javaPath', 'language', 'showSnapshots', 'optimize', 'jvmArgs', 'closeLauncherOnGame', 'showOldVersions', 'experimental', 'theme', 'width', 'height', 'launcherMode', 'updateUrl'];
+    const allowed = ['username', 'ram', 'mirror', 'javaPath', 'language', 'showSnapshots', 'optimize', 'jvmArgs', 'closeLauncherOnGame', 'showOldVersions', 'experimental', 'theme', 'width', 'height', 'launcherMode', 'updateUrl', 'custom', 'economy'];
     if (!allowed.includes(key)) throw new Error('Bad key');
     store.set(key, value);
     // При изменении username обновляем активный аккаунт, если он существует
@@ -257,6 +259,65 @@ function registerIpc() {
   ipcMain.handle('builds:installed', (_e, id, type) => mods.installedMods(id, type));
   ipcMain.handle('builds:registry', (_e, id) => mods.loadInstalled(id));
 ipcMain.handle('news:fetch', () => mods.fetchNews());
+  /* ============ Скины для превью профиля (кастомизация) ============ */
+  // ely.by: игроки идентифицируются по ID (UUID). Сначала резолвим ник -> UUID
+  // через authserver, затем берём текстуры из skinsystem (принимает только ник).
+  ipcMain.handle('skin:fetch', async (_e, nickname) => {
+    const nick = String(nickname || '').trim();
+    if (!nick) return { ok: false, error: 'Укажите ник игрока' };
+    const toDataUrl = buf => 'data:image/png;base64,' + buf.toString('base64');
+    const isPng = buf => buf.length > 8 && buf.readUInt32BE(1) === 0x504e470d;
+    // ely.by периодически роняет соединение — пара повторов с паузой
+    const retryFetch = async (url, tries = 3) => {
+      let last;
+      for (let i = 0; i < tries; i++) {
+        try {
+          return await fetch(url, { redirect: 'follow' });
+        } catch (e) {
+          last = e;
+          if (i < tries - 1) await new Promise(res => setTimeout(res, 1200));
+        }
+      }
+      throw last;
+    };
+    try {
+      // 1) Ник -> UUID (authserver.ely.by, Mojang-совместимый API)
+      const profile = await retryFetch('https://authserver.ely.by/api/users/profiles/minecraft/' + encodeURIComponent(nick));
+      if (profile.status === 204 || profile.status === 404) return { ok: false, error: 'ELY.BY: игрок не найден' };
+      if (!profile.ok) return { ok: false, error: 'ELY.BY: сервис недоступен (' + profile.status + ')' };
+      const pr = await profile.json();
+      // 2) Текстуры по нику (skinsystem принимает ник, не UUID)
+      const tex = await retryFetch('https://skinsystem.ely.by/textures/' + encodeURIComponent(pr.name || nick));
+      if (tex.status === 204 || tex.status === 404) return { ok: false, error: 'ELY.BY: у игрока нет скина' };
+      if (!tex.ok) return { ok: false, error: 'ELY.BY: сервис недоступен (' + tex.status + ')' };
+      const j = await tex.json();
+      const skin = j && j.SKIN;
+      if (!skin || !skin.url) return { ok: false, error: 'ELY.BY: скин не найден' };
+      // 3) Скачиваем PNG скина
+      const img = await retryFetch(skin.url.replace(/^http:\/\//, 'https://'));
+      if (!img.ok) return { ok: false, error: 'ELY.BY: не удалось скачать скин' };
+      const buf = Buffer.from(await img.arrayBuffer());
+      if (!isPng(buf)) return { ok: false, error: 'ELY.BY: некорректный файл скина' };
+      // 4) Плащ (если есть)
+      let cape = '';
+      if (j.CAPE && j.CAPE.url) {
+        try {
+          const c = await retryFetch(j.CAPE.url.replace(/^http:\/\//, 'https://'), 2);
+          const cb = Buffer.from(await c.arrayBuffer());
+          if (c.ok && isPng(cb)) cape = toDataUrl(cb);
+        } catch (e) { /* плащ необязателен */ }
+      }
+      return {
+        ok: true,
+        uuid: pr.id,
+        texture: toDataUrl(buf),
+        model: (skin.metadata && skin.metadata.model) || 'classic',
+        cape
+      };
+    } catch (e) {
+      return { ok: false, error: 'Ошибка сети: ' + e.message };
+    }
+  });
   ipcMain.handle('system:gpu', () => {
     try {
       if (!app.getGPUFeatureStatus) return null;
