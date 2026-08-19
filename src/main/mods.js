@@ -407,34 +407,59 @@ async function installForgeLike(build, gameVersion, loader, onProgress) {
     if (onProgress) onProgress(0.3, 'Установщик из кеша');
   }
   try { await fsp.copyFile(cacheInstall, installerPath); } catch (e) {}
-  const needMajor = forgeJavaMajor(gameVersion);
-  let java = await findJavaMajor(needMajor);
-  if (!java) {
-    if (onProgress) onProgress(0.31, 'Скачивание Java ' + needMajor + '...');
-    java = await ensureJavaRuntime(needMajor, (p) => onProgress && onProgress(0.31 + p * 0.45, 'Скачивание Java ' + needMajor + '...'));
-  }
-  const gameDir = path.join(bdir, 'game');
-  await ensureFakeLauncherProfile(gameDir);
-  if (onProgress) onProgress(0.78, 'Установка ' + loader + ' (это занимает минуту)...');
-  log('запуск установщика', installerName, 'java:', java);
-  await new Promise((resolve, reject) => {
-    const p = spawn(java, ['-jar', installerPath, '--installClient', gameDir], { windowsHide: true });
-    let out = '';
-    let last = Date.now();
-    const tick = setInterval(() => { if (onProgress) onProgress(Math.min(0.97, 0.78 + (Date.now() - last) / 60000 * 0.18), 'Установка ' + loader + ' (это занимает минуту)...'); }, 500);
-    p.stdout.on('data', c => { out += c.toString(); });
-    p.stderr.on('data', c => out += c.toString());
-    p.on('error', (e) => { clearInterval(tick); reject(e); });
-    p.on('close', (code) => {
-      clearInterval(tick);
-      if (code === 0) resolve();
-      else reject(new Error('Установка ' + loader + ' не удалась (код ' + code + '): ' + out.slice(-300)));
+  // Общий кэш установки: одинаковые версии (gameVersion + лоадер + версия лоадера)
+  // ставятся ОДИН раз, новые сборки просто копируют готовый клиент (не качают заново)
+  const stageDir = path.join(ROOT, 'cache', 'forge-install', `${loader}-${gameVersion}-${ver}`);
+  const stagedOk = fs.existsSync(path.join(stageDir, 'libraries')) && fs.existsSync(path.join(stageDir, 'versions'));
+  if (!stagedOk) {
+    const needMajor = forgeJavaMajor(gameVersion);
+    let java = await findJavaMajor(needMajor);
+    if (!java) {
+      if (onProgress) onProgress(0.31, 'Скачивание Java ' + needMajor + '...');
+      java = await ensureJavaRuntime(needMajor, (p) => onProgress && onProgress(0.31 + p * 0.45, 'Скачивание Java ' + needMajor + '...'));
+    }
+    await ensureFakeLauncherProfile(stageDir);
+    if (onProgress) onProgress(0.78, 'Установка ' + loader + ' (впервые для этой версии)...');
+    log('запуск установщика', installerName, 'java:', java, '->', stageDir);
+    await new Promise((resolve, reject) => {
+      const p = spawn(java, ['-jar', installerPath, '--installClient', stageDir], { windowsHide: true });
+      let out = '';
+      let last = Date.now();
+      const tick = setInterval(() => { if (onProgress) onProgress(Math.min(0.97, 0.78 + (Date.now() - last) / 60000 * 0.18), 'Установка ' + loader + ' (это занимает минуту)...'); }, 500);
+      p.stdout.on('data', c => { out += c.toString(); });
+      p.stderr.on('data', c => out += c.toString());
+      p.on('error', (e) => { clearInterval(tick); reject(e); });
+      p.on('close', (code) => {
+        clearInterval(tick);
+        if (code === 0) resolve();
+        else reject(new Error('Установка ' + loader + ' не удалась (код ' + code + '): ' + out.slice(-300)));
+      });
     });
-  });
+  } else {
+    log('клиент', loader, gameVersion, ver, 'уже в кэше:', stageDir);
+    if (onProgress) onProgress(0.92, 'Клиент ' + loader + ' уже в кэше');
+  }
+  // Копируем готовый клиент из общего кэша в папку сборки (быстрее скачивания)
+  const gameDir = path.join(bdir, 'game');
+  await copyDirContents(path.join(stageDir, 'libraries'), path.join(gameDir, 'libraries'));
+  await copyDirContents(path.join(stageDir, 'versions'), path.join(gameDir, 'versions'));
   const profile = await buildForgeProfile(build, gameVersion, isNeo);
   await writeVersionJson(build, gameVersion, profile);
   if (onProgress) onProgress(1);
   return profile;
+}
+
+// Копирует содержимое папки src в dst рекурсивно (для общего кэша Forge/NeoForge)
+async function copyDirContents(src, dst) {
+  if (!fs.existsSync(src)) return;
+  await fsp.mkdir(dst, { recursive: true });
+  for (const e of fs.readdirSync(src)) {
+    const s = path.join(src, e);
+    const d = path.join(dst, e);
+    const st = fs.statSync(s);
+    if (st.isDirectory()) await copyDirContents(s, d);
+    else await fsp.copyFile(s, d);
+  }
 }
 
 function pickLoaderVersion(all, gameVersion, isNeo) {
@@ -1327,6 +1352,111 @@ async function importBuild(manifest, onProgress) {
   return id;
 }
 
+// ============ Импорт модпака .mrpack (Modrinth Pack Format) ============
+// .mrpack — это ZIP с modrinth.index.json и папкой overrides/.
+// Создаём сборку, ставим лоадер, качаем файлы по прямым ссылкам из манифеста,
+// а overrides раскладываем в папку игры.
+async function importMrpack(filePath, onProgress) {
+  const tmp = path.join(ROOT, 'cache', 'mrpack-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6));
+  try {
+    await fsp.mkdir(tmp, { recursive: true });
+    const okZip = await execOut('powershell.exe', [
+      '-NoProfile', '-Command',
+      'Expand-Archive -LiteralPath ' + JSON.stringify(filePath) + ' -DestinationPath ' + JSON.stringify(tmp) + ' -Force'
+    ]);
+    if (!okZip) throw new Error('Не удалось распаковать .mrpack (файл повреждён?)');
+
+    let manifest;
+    try {
+      manifest = JSON.parse(await fsp.readFile(path.join(tmp, 'modrinth.index.json'), 'utf8'));
+    } catch (e) {
+      throw new Error('В .mrpack нет modrinth.index.json');
+    }
+    if (!manifest.name || !manifest.versionId) throw new Error('Некорректный modrinth.index.json (нет name/versionId)');
+
+    // Лоадер из зависимостей модпака (приоритет: neoforge → forge → quilt → fabric)
+    const deps = manifest.dependencies || {};
+    let loader = '';
+    if (deps.neoforge) loader = 'neoforge';
+    else if (deps.forge) loader = 'forge';
+    else if (deps['quilt-loader']) loader = 'quilt';
+    else if (deps['fabric-loader']) loader = 'fabric';
+    const gameVersion = String(manifest.versionId);
+
+    const builds = await loadBuilds();
+    const id = 'build-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6);
+    const b = {
+      id,
+      name: String(manifest.name || '').trim() || 'Модпак',
+      gameVersion,
+      loader,
+      icon: 'Grass.png',
+      created: Date.now()
+    };
+    const bdir = buildDir(id);
+    await fsp.mkdir(path.join(bdir, 'game', 'mods'), { recursive: true });
+    await fsp.mkdir(path.join(bdir, 'game', 'resourcepacks'), { recursive: true });
+    await fsp.mkdir(path.join(bdir, 'game', 'shaderpacks'), { recursive: true });
+    await fsp.mkdir(path.join(bdir, 'game', 'datapacks'), { recursive: true });
+    await fsp.mkdir(path.join(bdir, 'game'), { recursive: true });
+
+    if (loader) {
+      if (onProgress) onProgress(0, 'Установка ' + loader + ' ' + gameVersion + '...');
+      await installLoader(b, gameVersion, loader, (fr) => onProgress && onProgress(fr * 0.15, 'Установка ' + loader + '...'));
+    }
+    builds.unshift(b);
+    await saveBuilds(builds);
+
+    // Файлы: качаем только в знакомые папки сборки (mods/, resourcepacks/...);
+    // остальное (config и т.п.) приходит через overrides ниже
+    const files = Array.isArray(manifest.files) ? manifest.files : [];
+    const SAFE_PREFIX = ['mods/', 'resourcepacks/', 'shaderpacks/', 'datapacks/'];
+    const total = files.length;
+    let done = 0;
+    const reg = { mod: [], resourcepack: [], shaderpack: [], datapack: [] };
+    for (const f of files) {
+      done++;
+      const p = String(f.path || '');
+      if (onProgress) onProgress(done / total, p);
+      if (!SAFE_PREFIX.some(pre => p.startsWith(pre))) continue;
+      const dest = path.join(bdir, 'game', p.split('/').join(path.sep));
+      const urls = Array.isArray(f.downloads) ? f.downloads.filter(u => typeof u === 'string' && u) : [];
+      if (!urls.length) continue;
+      let lastErr = null;
+      let ok = false;
+      for (const u of urls) {
+        try { await downloadFile(u, dest, () => {}); ok = true; break; }
+        catch (e) { lastErr = e; }
+      }
+      if (!ok) { log('mrpack file error', p, lastErr && lastErr.message); continue; }
+      // Запоминаем проект в реестр (для будущего экспорта) по sha1 из манифеста
+      const type = p.startsWith('mods/') ? 'mod'
+        : p.startsWith('resourcepacks/') ? 'resourcepack'
+        : p.startsWith('shaderpacks/') ? 'shaderpack' : 'datapack';
+      try {
+        if (f.hashes && f.hashes.sha1) {
+          const mrf = await findModrinthByHash(f.hashes.sha1);
+          if (mrf && mrf.project_id) reg[type].push({ projectId: mrf.project_id, filename: path.basename(p) });
+        }
+      } catch (e) {}
+    }
+    for (const [type, list] of Object.entries(reg)) {
+      if (list.length) await recordInstalled(id, type, list);
+    }
+
+    // overrides — раскладываем прямо в папку игры сборки
+    const overrides = path.join(tmp, 'overrides');
+    if (fs.existsSync(overrides)) {
+      await copyDirContents(overrides, path.join(bdir, 'game'));
+    }
+
+    if (onProgress) onProgress(1, 'Готово');
+    return id;
+  } finally {
+    await fsp.rm(tmp, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 const NEWS_API = 'https://launchercontent.mojang.com/v2/news.json';
 function stripTags(s) {
   return String(s || '').replace(/<[^>]*>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#0?39;/g, "'").replace(/&#x27;/g, "'").trim();
@@ -1408,7 +1538,7 @@ module.exports = {
   mrBatchProjects, mrBatchVersions,
   buildsList, buildCreate, deleteBuild, installedMods, installProject, deleteMod,
   loadInstalled,
-  exportBuild, importBuild, findModrinthByHash, packConfigs, unpackConfigs,
+  exportBuild, importBuild, importMrpack, findModrinthByHash, packConfigs, unpackConfigs,
   findJava, findJavaMajor, javaCandidates, javaMajor, ensureJavaRuntime,
   modsDir, packsDir, buildDir, loadBuilds,
   ensureSkinMod,

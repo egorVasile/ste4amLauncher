@@ -169,6 +169,70 @@ function rewriteUrl(url) {
   return url;
 }
 
+// Возвращает URL того же файла на ДРУГОМ зеркале (для автоматического отката).
+// Умеет и «кривой» формат BMCLAPI (/version/piston-data.mojang.com/...), из-за
+// которого файлы не качались, когда у зеркала нет нужного объекта.
+function altMirrorUrl(url) {
+  const m = /^https:\/\/bmclapi2\.bangbang93\.com\/version\/(piston-data\.mojang\.com\/.+)$/.exec(url);
+  if (m) return 'https://' + m[1];
+  if (url.startsWith('https://piston-data.mojang.com/')) return 'https://bmclapi2.bangbang93.com/version/' + url.slice('https://piston-data.mojang.com/'.length);
+  if (url.startsWith('https://bmclapi2.bangbang93.com/version/')) return 'https://piston-data.mojang.com/' + url.slice('https://bmclapi2.bangbang93.com/version/'.length);
+  if (url.startsWith(MOJANG.libraries)) return BMCLAPI.libraries + url.slice(MOJANG.libraries.length);
+  if (url.startsWith(BMCLAPI.libraries)) return MOJANG.libraries + url.slice(BMCLAPI.libraries.length);
+  if (url.startsWith(MOJANG.assets)) return BMCLAPI.assets + url.slice(MOJANG.assets.length);
+  if (url.startsWith(BMCLAPI.assets)) return MOJANG.assets + url.slice(BMCLAPI.assets.length);
+  return null;
+}
+
+// Скачивание с умным откатом: не вышло с одного зеркала (404/timeout) — пробуем другое
+async function downloadMirrored(url, dest, onProgress) {
+  const alts = [url, altMirrorUrl(url)].filter(Boolean);
+  let lastErr = null;
+  for (const u of alts) {
+    try {
+      await downloadFile(u, dest, onProgress);
+      return dest;
+    } catch (e) {
+      lastErr = e;
+      log('fallback:', u, '->', e.message);
+    }
+  }
+  throw lastErr || new Error('Download failed: ' + url);
+}
+
+// httpGet с откатом на другое зеркало
+async function httpGetMirrored(url, headers = {}) {
+  const alts = [url, altMirrorUrl(url)].filter(Boolean);
+  let lastErr = null;
+  for (const u of alts) {
+    try { return await httpGet(u, headers); } catch (e) { lastErr = e; }
+  }
+  throw lastErr || new Error('Request failed: ' + url);
+}
+
+// Быстрая проверка, есть ли интернет (для умной подсказки об ошибке скачивания)
+async function checkNet() {
+  const probes = [
+    'https://launchermeta.mojang.com/mc/game/version_manifest_v2.json',
+    'https://api.modrinth.com/v2/tag/game_version'
+  ];
+  for (const u of probes) {
+    try {
+      await new Promise((resolve, reject) => {
+        const mod = u.startsWith('https') ? https : http;
+        const req = mod.get(u, { headers: { 'User-Agent': 'st4amLauncher/0.1' } }, (res) => {
+          res.resume();
+          resolve(res.statusCode >= 200 && res.statusCode < 500);
+        });
+        req.on('error', reject);
+        req.setTimeout(4000, () => { req.destroy(new Error('timeout')); });
+      });
+      return true;
+    } catch (e) { /* пробуем следующий */ }
+  }
+  return false;
+}
+
 /* ============ Version manifest ============ */
 
 async function fetchManifest() {
@@ -219,7 +283,7 @@ async function ensureAssets(vj, onProgress) {
   try { index = JSON.parse(await fsp.readFile(indexFile, 'utf8')); } catch (e) { /* noop */ }
   if (!index) {
     onProgress('СКАЧИВАНИЕ ИНДЕКСА АССЕТОВ', 0);
-    const buf = await httpGet(rewriteUrl(ai.url));
+    const buf = await httpGetMirrored(rewriteUrl(ai.url));
     index = JSON.parse(buf.toString('utf8'));
     await fsp.mkdir(path.dirname(indexFile), { recursive: true });
     await fsp.writeFile(indexFile, JSON.stringify(index));
@@ -247,7 +311,7 @@ async function ensureAssets(vj, onProgress) {
       const [k, o] = already[i++];
       const p = path.join(d.assets, 'objects', o.hash.slice(0, 2), o.hash);
       try {
-        await downloadFile(rewriteUrl(MOJANG.assets + o.hash.slice(0, 2) + '/' + o.hash), p);
+        await downloadMirrored(rewriteUrl(MOJANG.assets + o.hash.slice(0, 2) + '/' + o.hash), p);
       } catch (e) { log('asset fail', k, e.message); }
       done++;
       if (done % 50 === 0 || done === keys.length) {
@@ -344,7 +408,7 @@ async function ensureLibraries(vj, onProgress) {
   async function worker() {
     while (i < toDownload.length) {
       const item = toDownload[i++];
-      try { await downloadFile(rewriteUrl(item.url), item.dest); } catch (e) { log('lib fail', item.url, e.message); }
+      try { await downloadMirrored(rewriteUrl(item.url), item.dest); } catch (e) { log('lib fail', item.url, e.message); }
       done++;
       onProgress('БИБЛИОТЕКИ', done / Math.max(1, toDownload.length));
     }
@@ -879,7 +943,7 @@ async function launchVersion(opts, onEvent) {
     const cUrl = cInfo && cInfo.url;
     if (!cUrl) throw new Error('Нет URL клиента в манифесте');
     emit('log', { line: '> скачивание клиента ' + vj.id + ' (' + Math.round((cInfo && cInfo.size || 0) / 1048576) + ' MB)...' });
-    await downloadFile(rewriteUrl(cUrl), clientJar, (p) => {
+    await downloadMirrored(rewriteUrl(cUrl), clientJar, (p) => {
       emit('stage', { stage: 'СКАЧИВАНИЕ КЛИЕНТА', pct: 0.05 + p * 0.1 });
     });
   } else {
@@ -955,5 +1019,5 @@ function gameRunning() {
 }
 
 module.exports = {
-  setRoot, dirs, listVersions, getVersionJson, launchVersion, stopGame, gameRunning, findJava, versionScreenshot
+  setRoot, dirs, listVersions, getVersionJson, launchVersion, stopGame, gameRunning, findJava, versionScreenshot, checkNet
 };

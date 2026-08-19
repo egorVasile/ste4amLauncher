@@ -232,7 +232,22 @@ function registerIpc() {
       }
       return { ok: true };
     } catch (e) {
-      emit('launch:error', { message: e.message });
+      const msg = String((e && e.message) || e);
+      // Сбой скачивания (404/timeout): проверяем интернет и подсказываем про зеркало «Авто»
+      if (/^HTTP \d{3}|timeout/i.test(msg)) {
+        try {
+          const online = await launcher.checkNet();
+          emit('launch:error', {
+            message: online
+              ? 'Не удалось скачать файлы игры (' + msg.slice(0, 160) + ').\nВ настройках лаунчера поставьте зеркало скачивания «Авто» и попробуйте снова.'
+              : 'Похоже, нет интернета: не удалось скачать файлы игры (' + msg.slice(0, 160) + ').\nВключите интернет, поставьте зеркало скачивания «Авто» в настройках и попробуйте снова.'
+          });
+        } catch (e2) {
+          emit('launch:error', { message: msg });
+        }
+      } else {
+        emit('launch:error', { message: msg });
+      }
       throw e;
     }
   });
@@ -384,7 +399,10 @@ ipcMain.handle('update:status', () => updater.lastUpdateStatus());
   async function openDialog() {
     const { dialog } = require('electron');
     const res = await dialog.showOpenDialog({
-      filters: [{ name: 'st4am', extensions: ['st4am'] }],
+      filters: [
+        { name: 'Сборки', extensions: ['st4am', 'mrpack'] },
+        { name: 'Все файлы', extensions: ['*'] }
+      ],
       properties: ['openFile']
     });
     return res.canceled ? null : res.filePaths[0];
@@ -420,6 +438,21 @@ ipcMain.handle('update:status', () => updater.lastUpdateStatus());
       return { ok: true, buildId };
     } catch (e) {
       console.error('[builds:import]', e && e.stack || e);
+      return { ok: false, error: e.message };
+    }
+  });
+  // Импорт модпака .mrpack (Modrinth Pack Format)
+  ipcMain.handle('mods:import-mrpack', async (e, filePath) => {
+    console.log('[mods:import-mrpack] файл:', filePath);
+    try {
+      const buildId = await mods.importMrpack(filePath, (frac, file) => {
+        e.sender.send('builds:progress', { frac, file });
+      });
+      emit('builds:changed', {});
+      console.log('[mods:import-mrpack] создана сборка:', buildId);
+      return { ok: true, buildId };
+    } catch (e) {
+      console.error('[mods:import-mrpack]', e && e.stack || e);
       return { ok: false, error: e.message };
     }
   });

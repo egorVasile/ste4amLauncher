@@ -1079,7 +1079,9 @@
       if (fill) fill.style.width = Math.round(d.frac * 100) + '%';
       if (stage) stage.textContent = d.file || '';
     });
-    const res = await api.invoke('builds:import', filePath);
+    const res = filePath.toLowerCase().endsWith('.mrpack')
+      ? await api.invoke('mods:import-mrpack', filePath)
+      : await api.invoke('builds:import', filePath);
     off();
     if (res.ok) {
       mcToast('СБОРКА ИМПОРТИРОВАНА: ' + res.buildId);
@@ -2004,6 +2006,10 @@
     buildTypeButtons();
     refreshBuilds();
     api.invoke('update:check').then(u => { if (u && u.version) showUpdateModal(u); });
+    // Версия лаунчера в статус-баре (реальная, из package.json)
+    api.invoke('app:info').then(i => {
+      if (i && i.version) $('#appVersion').textContent = 'v' + i.version + ' · st4amLauncher';
+    }).catch(() => { $('#appVersion').textContent = 'st4amLauncher'; });
     // Статус последнего запуска обновления: успех или причина ошибки
     api.invoke('update:status').then(s => {
       if (s && s.error) showToast('ОШИБКА ОБНОВЛЕНИЯ: ' + String(s.error).slice(0, 220), true);

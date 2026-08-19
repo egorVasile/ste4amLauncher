@@ -31,6 +31,7 @@ const INVOKE = [
   'diagnosis:relaunch',
   'builds:export',
   'builds:import',
+  'mods:import-mrpack',
   'mods:java',
   'game:open-dir',
   'shell:open-root',
