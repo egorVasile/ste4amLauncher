@@ -792,7 +792,8 @@ function subst(s, map) {
 /* ============ Version art (official launcher images) ============ */
 
 const ART_URL = 'https://launchercontent.mojang.com/v2/javaPatchNotes.json';
-const NEWS_URL = 'https://launchercontent.mojang.com/v2/news.json';
+// Новости берём с GitHub (см. news.json в репозитории) — без зависимости от серверов Mojang
+const NEWS_URL = 'https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/news.json';
 const UA = { 'User-Agent': 'st4amLauncher/0.1' };
 
 async function getPatchNotes() {
