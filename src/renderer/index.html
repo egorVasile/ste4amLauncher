@@ -6,19 +6,19 @@
 <title>st4amLauncher — дизайн A (официальный)</title>
 <style>
   @font-face {
-    font-family: 'MinecraftTenV2';
+    font-family: 'St4amPixelHead';
     font-style: normal;
     font-weight: 400;
-    src: url('fonts/MinecraftTenV2.woff2') format('woff2');
+    src: url('fonts/St4amPixelHead.ttf') format('truetype');
   }
   @font-face {
-    font-family: 'Minecraft';
+    font-family: 'St4amPixel';
     font-style: normal;
     font-weight: 400;
-    src: url('fonts/MinecraftSeven.woff2') format('woff2');
+    src: url('fonts/St4amPixel.ttf') format('truetype');
   }
 
-  /* ==== Токены официального лаунчера Mojang (из app.202c3aeb.css) ==== */
+  /* ==== Палитра St4am (собственные токены интерфейса) ==== */
   :root {
     --mc-green-1: #a0e081; --mc-green-2: #86d562; --mc-green-3: #6cc349;
     --mc-green-4: #52a535; --mc-green-5: #3c8527; --mc-green-6: #2a641c;
@@ -30,11 +30,11 @@
     --mc-bg: #171714;
     --mc-sidebar: #262423;
     --mc-on-green: #fcf5f1;
-    --mc-font: 'MinecraftTenV2', 'Minecraft', 'Segoe UI', sans-serif;
-    --mc-font-body: 'Minecraft', 'MinecraftTenV2', 'Segoe UI', sans-serif;
+    --mc-font: 'St4amPixelHead', 'St4amPixel', 'Segoe UI', sans-serif;
+    --mc-font-body: 'St4amPixel', 'St4amPixelHead', 'Segoe UI', sans-serif;
   }
 
-  /* ==== Светлая тема — официальная светлая тема Mojang Launcher (3.15.8) ==== */
+  /* ==== Светлая тема ==== */
   html[data-theme="light"] {
     --mc-bg: #323233;
     --mc-sidebar: #1f1f1e;
@@ -877,7 +877,7 @@
   #toast.rem { background: #8a4b12; border-color: #5c3008; color: #fff3e2; }
   #toast .t-dot { width: 8px; height: 8px; background: #7dffa8; border-radius: 50%; flex: 0 0 auto; }
   #toast.rem .t-dot { background: #ffd17d; }
-  .modal.wide { width: 1040px; max-width: 94vw; }
+  .modal.wide { width: 1180px; max-width: 94vw; }
   .b-fav {
     position: absolute; top: 6px; right: 6px; z-index: 6; width: 26px; height: 26px;
     background: var(--mc-grey-4); border: 2px solid var(--mc-off-black);
@@ -907,23 +907,23 @@
   .mp-fav.on { background: #ffd76a; border-color: var(--mc-off-black); color: var(--mc-off-black); }
   .mp-fav.on svg { color: var(--mc-off-black); }
   .mp-grid { display: flex; gap: 12px; align-items: stretch; }
-  .mp-col-left { flex: 0 0 240px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  .mp-col-left { flex: 0 0 300px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
   .mp-col-mid { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; }
   .mp-col-right { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; }
   .mp-gallery { display: flex; flex-direction: column; gap: 8px; }
-  .mp-main { width: 100%; max-height: 220px; object-fit: contain; image-rendering: pixelated; background: var(--mc-off-black); border: 2px solid var(--mc-off-black); }
+  .mp-main { width: 100%; max-height: 400px; object-fit: contain; image-rendering: pixelated; background: var(--mc-off-black); border: 2px solid var(--mc-off-black); }
   .mp-thumbs { display: flex; gap: 5px; flex-wrap: wrap; }
   .mp-thumb { width: 58px; height: 58px; object-fit: cover; image-rendering: pixelated; border: 2px solid var(--mc-off-black); cursor: pointer; opacity: .6; transition: all .15s; background: var(--mc-off-black); }
   .mp-thumb.on, .mp-thumb:hover { opacity: 1; border-color: var(--mc-green-4); }
   .mp-body {
     font-family: var(--mc-font-body); font-size: 11px; color: var(--mc-grey-2);
-    line-height: 1.5; overflow-y: auto; flex: 1 1 auto; min-height: 120px; max-height: 42vh;
+    line-height: 1.5; overflow-y: auto; flex: 1 1 auto; min-height: 120px; max-height: 58vh;
     border: 2px solid var(--mc-off-black); background: var(--mc-grey-5); padding: 10px;
   }
   .mp-body img { max-width: 100%; height: auto; }
   .mp-body a { color: var(--mc-green-2); }
   .mp-vtitle { font-family: var(--mc-font); font-size: 11px; letter-spacing: .08em; color: var(--mc-grey-3); margin: 0 0 6px; }
-  .mp-vlist { display: flex; flex-direction: column; gap: 6px; overflow-y: auto; flex: 1 1 auto; max-height: 42vh; }
+  .mp-vlist { display: flex; flex-direction: column; gap: 6px; overflow-y: auto; flex: 1 1 auto; max-height: 58vh; }
   .mp-vlist .bm-meta { font-family: var(--mc-font-body); font-size: 9.5px; color: var(--mc-grey-3); }
   .mp-vlist .bm-name { font-size: 10.5px; }
   .favs-list { flex: 1; display: flex; flex-direction: column; gap: 14px; min-height: 0; overflow-y: auto; }
@@ -935,7 +935,7 @@
     background: rgba(0,0,0,.6);
     z-index: 100;
     display: none;
-    align-items: stretch;
+    align-items: center;
     justify-content: center;
     animation: mc-fade-in .18s ease;
   }
@@ -1021,6 +1021,8 @@
   .b-mods { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding-right: 2px; }
   .b-mod { display: flex; align-items: center; gap: 8px; background: var(--mc-grey-5); border: 2px solid var(--mc-off-black); padding: 8px 10px; font-family: var(--mc-font-body); font-size: 12.5px; color: var(--mc-off-white); animation: mc-fade-up .2s ease both; }
   .b-mods .b-mod { position: relative; display: flex; align-items: flex-end; gap: 8px; background: var(--mc-grey-5); border: 2px solid var(--mc-off-black); padding: 13px 12px 12px; font-family: var(--mc-font-body); font-size: 13px; color: var(--mc-off-white); animation: mc-fade-up .2s ease both; overflow: hidden; min-height: var(--cust-mod-h); }
+  .b-mods .b-mod.clickable { cursor: pointer; }
+  .b-mods .b-mod.clickable:hover { border-color: var(--mc-green-3); }
   .b-mods .b-mod-img { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
   .b-mods .b-mod-img img { width: 100%; height: 100%; object-fit: cover; }
   .b-mods .b-mod::after { content: ''; position: absolute; inset: 0; background: linear-gradient(to left, hsla(0,0%,0%,.15) 20%, hsla(0,0%,0%,.85) 100%); pointer-events: none; }
