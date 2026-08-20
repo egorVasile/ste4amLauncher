@@ -405,6 +405,7 @@
     ['Оптимизация лаунчера', 'Теперь игра запускается в 2 раза быстрее.', '15.11.2024', 'Redstone_Ore.png']
   ];
   const NEWS_ICONS = ['Diamond_Ore.png', 'Gold_Ore.png', 'Iron_Ore.png', 'Redstone_Ore.png'];
+  const CAT_LABEL = { launcher: 'ЛАУНЧЕР', java: 'JAVA', bedrock: 'BEDROCK' };
   function buildNews() {
     const mk = (n, i) => {
       const isArr = Array.isArray(n);
@@ -414,6 +415,7 @@
       const img = !isArr && n.images && n.images[0] ? n.images[0] : '';
       const icon = isArr && n[3] ? n[3] : NEWS_ICONS[i % NEWS_ICONS.length];
       const idx = isArr ? -1 : i;
+      const cat = !isArr && n.category ? `<span class="news-cat ${escapeHtml(n.category)}">${CAT_LABEL[n.category] || escapeHtml(n.category)}</span>` : '';
       const thumb = img
         ? `<div class="news-thumb" style="background-image:url('${img}')"></div>`
         : `<div class="news-thumb" style="background-image:url('${ic(icon)}')"></div>`;
@@ -421,7 +423,7 @@
       <div class="news-item" data-idx="${idx}">
         ${thumb}
         <div>
-          <h4>${title}</h4>
+          <h4>${title}${cat}</h4>
           <p>${desc}</p>
           <div class="date">${date}</div>
         </div>
@@ -438,16 +440,32 @@
         it.addEventListener('click', () => openNewsModal(arr[idx]));
       });
     };
-    const list = $('#newsList');
     const full = $('#newsFullList');
-    api.invoke('news:fetch').then(ns => {
-      const arr = Array.isArray(ns) && ns.length ? ns : NEWS;
-      wire(list, arr);
-      wire(full, arr);
+    const filters = $('#newsFilters');
+    const state = { all: [], launcher: [], java: [], bedrock: [] };
+    let cur = 'all';
+    const render = () => wire(full, state[cur] || []);
+    api.invoke('news:fetch').then(data => {
+      const l = (data && Array.isArray(data.launcher)) ? data.launcher : [];
+      const jv = (data && Array.isArray(data.java)) ? data.java : [];
+      const bd = (data && Array.isArray(data.bedrock)) ? data.bedrock : [];
+      state.launcher = l;
+      state.java = jv;
+      state.bedrock = bd;
+      const jvKeys = new Set(jv.map(x => x.title));
+      state.all = l.concat(jv).concat(bd.filter(x => !jvKeys.has(x.title)));
+      render();
     }).catch(() => {
-      wire(list, NEWS);
-      wire(full, NEWS);
+      state.all = NEWS;
+      state.launcher = NEWS;
+      render();
     });
+    if (filters) filters.querySelectorAll('.nf-btn').forEach(b => b.addEventListener('click', () => {
+      filters.querySelectorAll('.nf-btn').forEach(x => x.classList.remove('on'));
+      b.classList.add('on');
+      cur = b.dataset.f;
+      render();
+    }));
   }
   function openNewsModal(n) {
     if (!n || Array.isArray(n)) return;
