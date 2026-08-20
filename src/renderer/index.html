@@ -541,6 +541,14 @@
   }
   .news-title .refresh:hover { transform: rotate(180deg); }
   .news-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding-right: 4px; }
+.news-filters { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+.nf-btn { padding: 6px 14px; font-size: 11px; font-family: var(--mc-font); letter-spacing: .06em; color: var(--mc-grey-2); background: var(--mc-grey-5); border: none; border-radius: 3px; cursor: pointer; transition: background .15s, color .15s; }
+.nf-btn:hover { background: var(--mc-grey-4); color: var(--mc-off-white); }
+.nf-btn.on { background: var(--mc-green-4); color: var(--mc-on-green); }
+.news-cat { display: inline-block; font-size: 9px; font-family: var(--mc-font); letter-spacing: .08em; padding: 2px 7px; border-radius: 2px; margin-left: 6px; vertical-align: 2px; }
+.news-cat.launcher { background: var(--mc-green-4); color: var(--mc-on-green); }
+.news-cat.java { background: var(--mc-blue-4); color: var(--mc-on-green); }
+.news-cat.bedrock { background: var(--mc-grey-4); color: var(--mc-off-white); }
   .news-item {
     display: flex;
     flex-shrink: 0;
@@ -1188,6 +1196,12 @@
 
       <!-- ========== ВКЛАДКА: Новости ========== -->
       <section class="tab-panel" id="tab-news">
+        <div class="news-filters" id="newsFilters">
+          <button class="nf-btn on" data-f="all">ВСЕ</button>
+          <button class="nf-btn" data-f="launcher">ЛАУНЧЕР</button>
+          <button class="nf-btn" data-f="java">JAVA</button>
+          <button class="nf-btn" data-f="bedrock">BEDROCK</button>
+        </div>
         <div class="news-list" id="newsFullList" style="flex:1;overflow-y:auto;"></div>
       </section>
 
