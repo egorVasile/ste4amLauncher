@@ -776,11 +776,18 @@ function packsDir(id, type) { return path.join(buildDir(id), 'game', PACK_DIRS[t
 async function installedMods(buildId, type) {
   const dir = (type && type !== 'mod') ? packsDir(buildId, type) : modsDir(buildId);
   const out = [];
+  // реестр «файл → проект Modrinth» (installed.json в папке сборки)
+  let regFiles = [];
+  try {
+    const reg = await loadInstalled(buildId);
+    regFiles = (reg.files || []).filter(x => !type || x.type === type);
+  } catch (e) {}
   try {
     for (const f of fs.readdirSync(dir)) {
       const p = path.join(dir, f);
       const st = fs.statSync(p);
-      out.push({ filename: f, size: st.size });
+      const entry = regFiles.find(x => x.filename === f);
+      out.push({ filename: f, size: st.size, slug: entry ? entry.slug : null });
     }
   } catch (e) {}
   return out;
@@ -1109,7 +1116,7 @@ async function packConfigs(buildId) {
     const size = data.length;
     const header = Buffer.alloc(512);
     Buffer.from(name).copy(header, 0, 0, Math.min(100, name.length));
-    header.writeUInt32octal(size, 124, 11);
+    header.write(size.toString(8).padStart(11, '0') + '\0', 124, 'ascii');
     header[156] = 48; // ustar typeflag '0'
     'ustar  \0'.split('').forEach((c, i) => header[257 + i] = c.charCodeAt(0));
     const pad = (512 - (size % 512)) % 512;
@@ -1360,15 +1367,27 @@ async function importMrpack(filePath, onProgress) {
   const tmp = path.join(ROOT, 'cache', 'mrpack-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6));
   try {
     await fsp.mkdir(tmp, { recursive: true });
-    const okZip = await execOut('powershell.exe', [
-      '-NoProfile', '-Command',
-      'Expand-Archive -LiteralPath ' + JSON.stringify(filePath) + ' -DestinationPath ' + JSON.stringify(tmp) + ' -Force'
-    ]);
+    // tar определяет zip по содержимому (расширение .mrpack ему не мешает);
+    // фолбэк — Expand-Archive, но ему нужно расширение .zip
+    let okZip = await execOut('tar', ['-xf', filePath, '-C', tmp]);
+    if (!okZip) {
+      const zipCopy = tmp + '.zip';
+      try { await fsp.copyFile(filePath, zipCopy); } catch (e) { zipCopy = null; }
+      if (zipCopy) {
+        okZip = await execOut('powershell.exe', [
+          '-NoProfile', '-Command',
+          'Expand-Archive -LiteralPath ' + JSON.stringify(zipCopy) + ' -DestinationPath ' + JSON.stringify(tmp) + ' -Force'
+        ]);
+        await fsp.unlink(zipCopy).catch(() => {});
+      }
+    }
     if (!okZip) throw new Error('Не удалось распаковать .mrpack (файл повреждён?)');
 
     let manifest;
     try {
-      manifest = JSON.parse(await fsp.readFile(path.join(tmp, 'modrinth.index.json'), 'utf8'));
+      let idxTxt = await fsp.readFile(path.join(tmp, 'modrinth.index.json'), 'utf8');
+      if (idxTxt.charCodeAt(0) === 0xFEFF) idxTxt = idxTxt.slice(1); // снять BOM
+      manifest = JSON.parse(idxTxt);
     } catch (e) {
       throw new Error('В .mrpack нет modrinth.index.json');
     }
@@ -1457,7 +1476,9 @@ async function importMrpack(filePath, onProgress) {
   }
 }
 
-const NEWS_API = 'https://launchercontent.mojang.com/v2/news.json';
+// Новости лаунчера: берём с GitHub, чтобы не зависеть от серверов Mojang.
+// Файл news.json живёт в корне репозитория — текст можно менять без обновления лаунчера.
+const NEWS_API = 'https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/news.json';
 function stripTags(s) {
   return String(s || '').replace(/<[^>]*>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#0?39;/g, "'").replace(/&#x27;/g, "'").trim();
 }
