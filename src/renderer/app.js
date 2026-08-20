@@ -12,6 +12,52 @@
   let CURRENT_VERSION = '1.21.4';
   let STATE = { running: false, launching: false };
 
+  // ===== «Что нового»: показывается при первом запуске версии =====
+  // (после обновления лаунчера и после установки)
+  // Текст берётся с GitHub (whatsnew.json), чтобы с каждой новой версией
+  // было свежее описание — без переустановки лаунчера.
+  let APP_VERSION = '';
+  const WHATSNEW_URL = 'https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/whatsnew.json';
+  const NEWS_NOTES = {
+    '0.2.10': 'В этом обновлении мы починили главную боль — скачивание файлов игры.\n\n' +
+      '1) УМНОЕ ЗЕРКАЛО СКАЧИВАНИЯ\n' +
+      'Раньше если у зеркала (Mojang или BMCLAPI) не было файла, игра не запускалась с ошибкой 404. Теперь лаунчер сам пробует другое зеркало — автоматически, без ваших действий. Если скачать всё равно не вышло, лаунчер проверит интернет и подскажет, что делать: поставить зеркало «Авто» в настройках или включить интернет.\n\n' +
+      '2) ОБЩИЙ КЭШ ВЕРСИЙ FORGE/NEOFORGE\n' +
+      'Раньше каждая новая сборка заново скачивала и устанавливала патченный клиент — это долго. Теперь установка происходит один раз в общий кэш, а новые сборки той же версии просто копируют готовый клиент. Создание сборок стало намного быстрее.\n\n' +
+      '3) ИМПОРТ МОДПАКОВ .mrpack (Modrinth)\n' +
+      'В окне импорта сборки можно выбрать файл .mrpack. Лаунчер сам определит версию игры и лоадер (Fabric/Quilt/Forge/NeoForge), создаст сборку, скачает все моды и разложит конфиги (overrides).\n\n' +
+      '4) МЕЛОЧИ\n' +
+      'В шапке теперь показывается реальная версия лаунчера вместо старой надписи «v0.1.0».'
+  };
+  // Показывает окно «Что нового!» один раз для каждой новой версии
+  function maybeShowNews(version) {
+    if (!version) return;
+    let seen = '';
+    try { seen = localStorage.getItem('newsSeenVersion') || ''; } catch (e) {}
+    if (seen === version) return;
+    const fallback = NEWS_NOTES[version] || ('Лаунчер обновлён до версии ' + version + '.');
+    const show = (text) => {
+      openModal('Что нового!', `
+        <div class="upd-box">
+          <div class="upd-text" style="font-size:14px;line-height:1.8;white-space:pre-line;text-align:left">${escapeHtml(text)}</div>
+          <button class="secondary-btn" style="margin-top:12px;width:100%" id="newsOkBtn">ПОНЯТНО</button>
+        </div>
+      `, false, () => {
+        // компактная ширина под текст новостей + запрет inline onclick по CSP — вешаем обработчик явно
+        const mbx = modal.querySelector('.modal');
+        if (mbx) mbx.style.width = '600px';
+        const nb = $('#newsOkBtn');
+        if (nb) nb.addEventListener('click', () => modal && modal.classList.remove('show'));
+      });
+      try { localStorage.setItem('newsSeenVersion', version); } catch (e) {}
+    };
+    // Сначала пробуем свежий текст с GitHub, при любой ошибке — локальный
+    fetch(WHATSNEW_URL)
+      .then(r => (r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status))))
+      .then(j => show((j && j[version]) ? j[version] : fallback))
+      .catch(() => show(fallback));
+  }
+
   const VER_TYPES = {
     release: ['РЕЛИЗ', 'release'],
     snapshot: ['СНАПШОТ', 'snapshot'],
@@ -295,11 +341,16 @@
     $$('#versionsList .v-play').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
+        if (STATE.running) {
+          api.invoke('launch:stop');
+          return;
+        }
         applyVersion(btn.dataset.v);
         $('#versionDropdown').innerHTML = '&#9662; ' + btn.dataset.v;
         startLaunch();
       });
     });
+    syncPlayButtons();
   }
 
   /* ===== Моды (заглушка: fabric/vanilla) ===== */
@@ -408,21 +459,22 @@
         <div class="nw-date">${date}</div>
         <div class="nw-text">${text}</div>
       </div>`;
-    openModal('НОВОСТЬ', html);
-    if (images.length > 1) {
-      let cur = 0;
-      const img = $('#nwImg');
-      const dots = $$('.nw-dot');
-      const show = (i) => {
-        cur = (i + images.length) % images.length;
-        img.style.backgroundImage = "url('" + images[cur] + "')";
-        dots.forEach((d, di) => d.classList.toggle('on', di === cur));
-      };
-      const prev = $('#nwPrev'), next = $('#nwNext');
-      if (prev) prev.addEventListener('click', (e) => { e.stopPropagation(); show(cur - 1); });
-      if (next) next.addEventListener('click', (e) => { e.stopPropagation(); show(cur + 1); });
-      dots.forEach(d => d.addEventListener('click', (e) => { e.stopPropagation(); show(parseInt(d.dataset.i, 10)); }));
-    }
+    openModal('НОВОСТЬ', html, false, () => {
+      if (images.length > 1) {
+        let cur = 0;
+        const img = $('#nwImg');
+        const dots = $$('.nw-dot');
+        const show = (i) => {
+          cur = (i + images.length) % images.length;
+          img.style.backgroundImage = "url('" + images[cur] + "')";
+          dots.forEach((d, di) => d.classList.toggle('on', di === cur));
+        };
+        const prev = $('#nwPrev'), next = $('#nwNext');
+        if (prev) prev.addEventListener('click', (e) => { e.stopPropagation(); show(cur - 1); });
+        if (next) next.addEventListener('click', (e) => { e.stopPropagation(); show(cur + 1); });
+        dots.forEach(d => d.addEventListener('click', (e) => { e.stopPropagation(); show(parseInt(d.dataset.i, 10)); }));
+      }
+    });
   }
   buildNews();
   const refreshNewsBtn = $('#refreshNews');
@@ -657,13 +709,25 @@
     return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
 
-  /* ===== Модалка ===== */
-  function openModal(title, bodyHtml, wide) {
+  /* ===== Модалка (с очередью: если уже открыта — покажем следующую после закрытия) ===== */
+  const modalQueue = [];
+  function openModal(title, bodyHtml, wide, onShow) {
     if (!modal) return;
+    if (modal.classList.contains('show')) {
+      modalQueue.push({ title, bodyHtml, wide, onShow });
+      return;
+    }
+    doOpenModal(title, bodyHtml, wide);
+    if (onShow) onShow();
+  }
+  function doOpenModal(title, bodyHtml, wide) {
     $('#modalTitle').textContent = title;
     $('#modalBody').innerHTML = bodyHtml;
     const mb = modal.querySelector('.modal');
-    if (mb) mb.classList.toggle('wide', !!wide);
+    if (mb) {
+      mb.style.width = ''; // сбрасываем инлайн-ширину (например, от окна новостей)
+      mb.classList.toggle('wide', !!wide);
+    }
     modal.classList.remove('show');
     void modal.offsetWidth;
     modal.classList.add('show');
@@ -672,6 +736,13 @@
       ram.addEventListener('input', () => { $('#ramValue').textContent = ram.value + ' GB'; });
     }
   }
+  new MutationObserver(() => {
+    if (!modal.classList.contains('show') && modalQueue.length) {
+      const next = modalQueue.shift();
+      doOpenModal(next.title, next.bodyHtml, next.wide);
+      if (next.onShow) next.onShow();
+    }
+  }).observe(modal, { attributes: true, attributeFilter: ['class'] });
   window.mcModalClose = () => modal && modal.classList.remove('show');
   window.mcToast = (msg) => setStatus(String(msg).toUpperCase(), 'busy');
   $('#modalClose').addEventListener('click', () => modal.classList.remove('show'));
@@ -681,20 +752,23 @@
       <div class="set-row"><div><div class="s-label">ПАМЯТЬ (RAM)</div><div class="s-desc">Выделенная память для игры (макс. ${settingsCache.totalRam} GB — реальная)</div></div><input type="range" id="ramSlider" min="1" max="${settingsCache.totalRam}" step="1" value="${safeRam(settingsCache.ram)}"/><div class="s-value" id="ramValue">${safeRam(settingsCache.ram)} GB</div></div>
       <div class="set-row"><div><div class="s-label">ИМЯ</div><div class="s-desc">Оффлайн-аккаунт</div></div><input type="text" id="mNick" value="${escapeHtml(settingsCache.username)}" style="background:var(--mc-grey-5);border:2px solid var(--mc-off-black);color:var(--mc-off-white);padding:6px 10px;font-family:var(--mc-font);font-size:12px;width:160px"/></div>
       <button class="secondary-btn" style="margin-top:4px" id="mDoneBtn">ГОТОВО</button>
-    `);
-    $('#mDoneBtn').addEventListener('click', () => modal.classList.remove('show'));
-    const ram = $('#ramSlider');
-    ram.addEventListener('input', () => {
-      const v = safeRam(ram.value);
-      ram.value = v;
-      $('#ramValue').textContent = v + ' GB';
-      settingsCache.ram = v;
-      api.invoke('settings:set', 'ram', v);
-    });
-    $('#mNick').addEventListener('change', (e) => {
-      const v = (e.target.value || 'Player').trim() || 'Player';
-      settingsCache.username = v;
-      api.invoke('settings:set', 'username', v);
+    `, false, () => {
+      const doneBtn = $('#mDoneBtn');
+      if (doneBtn) doneBtn.addEventListener('click', () => modal.classList.remove('show'));
+      const ram = $('#ramSlider');
+      if (ram) ram.addEventListener('input', () => {
+        const v = safeRam(ram.value);
+        ram.value = v;
+        $('#ramValue').textContent = v + ' GB';
+        settingsCache.ram = v;
+        api.invoke('settings:set', 'ram', v);
+      });
+      const nick = $('#mNick');
+      if (nick) nick.addEventListener('change', (e) => {
+        const v = (e.target.value || 'Player').trim() || 'Player';
+        settingsCache.username = v;
+        api.invoke('settings:set', 'username', v);
+      });
     });
   });
 
@@ -708,14 +782,31 @@
 
   function setLaunching(busy) {
     STATE.launching = busy;
-    playBtn.classList.toggle('busy', busy);
     if (busy) {
-      playBtn.innerHTML = '&#9696; ЗАПУСК...';
       launchPanel.classList.add('show');
       lpFill.style.width = '0%';
       lpPct.textContent = '0%';
       lpLog.innerHTML = '';
     }
+    syncPlayButtons();
+  }
+
+  // Одна кнопка запуска/остановки во всех местах (Играть, Сборки, Версии),
+  // чтобы «ОСТАНОВИТЬ» не улетала на другую вкладку
+  function syncPlayButtons() {
+    const running = !!STATE.running;
+    const launching = !!STATE.launching;
+    playBtn.classList.toggle('busy', launching);
+    playBtn.classList.toggle('running', running);
+    playBtn.innerHTML = running ? '&#9726; ОСТАНОВИТЬ' : (launching ? '&#9696; ЗАПУСК...' : '&#9654; PLAY');
+    const bp = $('#bdPlay');
+    if (bp) {
+      bp.classList.toggle('busy', launching);
+      bp.innerHTML = running ? '&#9726; ОСТАНОВИТЬ' : (launching ? '&#9696; ЗАПУСК...' : '&#9654; ИГРАТЬ');
+    }
+    $$('#versionsList .v-play').forEach(b => {
+      b.innerHTML = running ? '&#9726; ОСТАНОВИТЬ' : (launching ? '&#9696; ЗАПУСК...' : '&#9654; ИГРАТЬ');
+    });
   }
 
   function addLog(line) {
@@ -766,26 +857,24 @@
   });
   api.on('launch:error', (data) => {
     setLaunching(false);
-    playBtn.innerHTML = '&#9654; PLAY';
+    STATE.running = false;
     launchPanel.classList.remove('show');
+    syncPlayButtons();
     setStatus('ОШИБКА: ' + (data && data.message || 'неизвестно'), 'busy');
     addLog('> ОШИБКА: ' + (data && data.message));
   });
   api.on('launch:started', (data) => {
     setLaunching(false);
     STATE.running = true;
-    playBtn.classList.remove('busy');
-    playBtn.classList.add('running');
-    playBtn.innerHTML = '&#9726; ОСТАНОВИТЬ';
+    syncPlayButtons();
     setStatus('ИГРА ЗАПУЩЕНА (PID ' + data.pid + ')', 'running');
     lpStage.textContent = 'В ИГРЕ';
     lpPct.textContent = '100%';
   });
   api.on('launch:exit', () => {
     STATE.running = false;
-    playBtn.classList.remove('running');
-    playBtn.innerHTML = '&#9654; PLAY';
     launchPanel.classList.remove('show');
+    syncPlayButtons();
     setStatus('ОБНОВЛЕНО ТОЛЬКО ЧТО', '');
   });
 
@@ -897,7 +986,7 @@
       html += `<button class="secondary-btn" id="diagRam" style="margin-top:8px;width:100%">\u041e\u0422\u041a\u0420\u042b\u0422\u042c \u041d\u0410\u0421\u0422\u0420\u041e\u0419\u041a\u0418 RAM</button>`;
     }
     html += `<button class="secondary-btn" id="diagClose" style="margin-top:8px;width:100%">\u0417\u0410\u041a\u0420\u042b\u0422\u042c</button>`;
-    openModal('\u041f\u0420\u041e\u0411\u041b\u0415\u041c\u0410 \u041f\u0420\u0418 \u0417\u0410\u041f\u0423\u0421\u041a\u0415', html, true);
+    openModal('\u041f\u0420\u041e\u0411\u041b\u0415\u041c\u0410 \u041f\u0420\u0418 \u0417\u0410\u041f\u0423\u0421\u041a\u0415', html, true, () => {
     const mb = modal.querySelector('.modal');
     if (mb) mb.classList.add('wide');
     // клик по карточке → страница мода (с подсветкой нужной версии при несовпадении)
@@ -932,10 +1021,12 @@
       const s = $('.nav-item[data-tab="settings"]');
       if (s) s.click();
     });
-    $('#diagClose').addEventListener('click', () => {
+    const dc = $('#diagClose');
+    if (dc) dc.addEventListener('click', () => {
       modal.classList.remove('show');
       api.invoke('diagnosis:clear').catch(() => {});
     });
+  }); // onShow
   }
   api.on('launch:diagnosis', (report) => showDiagnostics(report));
 
@@ -956,6 +1047,8 @@
   const B_TYPES = [['mod', 'МОДЫ'], ['resourcepack', 'РЕСУРСПАКИ'], ['shaderpack', 'ШЕЙДЕРЫ'], ['datapack', 'ДАТАПАКИ']];
   let B_TYPE = 'mod';
   let INST_QUERY = '';
+  // Кэш названий/иконок модов с Modrinth (по slug) — чтобы не дёргать API на каждом рендере
+  const instInfoCache = {};
 
   // Тип проекта для установки/поиска версий: у карточки из «Избранного» своя категория
   // (btype/project_type), её нельзя заменять текущей вкладкой каталога (B_TYPE).
@@ -1045,8 +1138,11 @@
     if (!res.ok) {
       openModal('Ошибка экспорта', `
         <div style="color:var(--mc-default-warning,#ca3636);font-family:var(--mc-font-body);font-size:11px">${escapeHtml(res.error || 'Неизвестная ошибка')}</div>
-        <button class="secondary-btn" style="margin-top:10px;width:100%" onclick="mcModalClose()">ОК</button>
-      `);
+        <button class="secondary-btn" style="margin-top:10px;width:100%" id="expErrBtn">ОК</button>
+      `, false, () => {
+        const eb = $('#expErrBtn');
+        if (eb) eb.addEventListener('click', () => modal.classList.remove('show'));
+      });
       return;
     }
     if (res.skipped && res.skipped.length) {
@@ -1056,8 +1152,11 @@
           <span style="color:var(--mc-default-warning,#ca3636)">Пропущено модов (не найдены на Modrinth): ${res.skipped.length}</span><br>
           ${res.skipped.map(s => '&#8226; ' + escapeHtml(s)).join('<br>')}
         </div>
-        <button class="secondary-btn" style="margin-top:10px;width:100%" onclick="mcModalClose()">ПОНЯТНО</button>
-      `);
+        <button class="secondary-btn" style="margin-top:10px;width:100%" id="expSkipBtn">ПОНЯТНО</button>
+      `, false, () => {
+        const sb = $('#expSkipBtn');
+        if (sb) sb.addEventListener('click', () => modal.classList.remove('show'));
+      });
     } else {
       mcToast('ЭКСПОРТ УСПЕШЕН: ' + res.path);
     }
@@ -1090,8 +1189,11 @@
     } else {
       openModal('Ошибка импорта', `
         <div style="color:var(--mc-default-warning,#ca3636);font-family:var(--mc-font-body);font-size:11px">${escapeHtml(res.error || 'Неизвестная ошибка')}</div>
-        <button class="secondary-btn" style="margin-top:10px;width:100%" onclick="mcModalClose()">ОК</button>
-      `);
+        <button class="secondary-btn" style="margin-top:10px;width:100%" id="impErrBtn">ОК</button>
+      `, false, () => {
+        const ib = $('#impErrBtn');
+        if (ib) ib.addEventListener('click', () => modal.classList.remove('show'));
+      });
     }
   }
 
@@ -1130,7 +1232,14 @@
       </div>`;
     const bdImg = box.querySelector('.bd-head img');
     if (bdImg) applyEdgeAccent(bdImg, box.querySelector('.bd-head'));
-    $('#bdPlay').addEventListener('click', () => launchBuild(b));
+    $('#bdPlay').addEventListener('click', () => {
+      if (STATE.running) {
+        api.invoke('launch:stop');
+        return;
+      }
+      launchBuild(b);
+    });
+    syncPlayButtons();
     $('#bdExport').addEventListener('click', handleExport);
     $('#bdImport').addEventListener('click', handleImport);
     $('#bdDel').addEventListener('click', () => {
@@ -1169,7 +1278,7 @@
         const filenameEsc = escapeHtml(m.filename);
         const delay = i < 8 ? ';animation-delay:' + (i * 0.03).toFixed(2) + 's' : '';
         html += `
-          <div class="b-mod" data-f="${filenameEsc}" style="${delay}">
+          <div class="b-mod" data-f="${filenameEsc}" data-slug="${escapeHtml(m.slug || '')}" style="${delay}">
             <div class="b-mod-img"><img src="${modThumb(m.filename)}" alt="" loading="lazy" decoding="async" onerror="this.style.display='none'"></div>
             <div class="b-mod-content">
               <div class="bm-name" title="${filenameEsc}">${filenameEsc}</div>
@@ -1190,6 +1299,38 @@
         });
         const bImg = row.querySelector('.b-mod-img img');
         if (bImg) applyEdgeAccent(bImg, row);
+        // клик по карточке → страница мода (название/фото берём из Modrinth)
+        const slug = row.dataset.slug;
+        if (slug) {
+          row.classList.add('clickable');
+          row.addEventListener('click', (e) => {
+            if (e.target.closest('.bm-x')) return;
+            const info = instInfoCache[slug];
+            if (info && info.title) {
+              openModPage({ slug, title: info.title, icon_url: info.icon_url || '', description: info.description || '', downloads: info.downloads || 0, categories: info.categories || [], project_type: info.project_type || '', btype: itemType({ project_type: info.project_type || '', btype: B_TYPE }) });
+            }
+          });
+        }
+      });
+      // Асинхронно подменяем иконку и название на реальные с Modrinth
+      list.forEach((m, i) => {
+        if (!m.slug) return;
+        const slug = m.slug;
+        const row = box.querySelector('[data-slug="' + CSS.escape(slug) + '"]');
+        const enrich = (info) => {
+          if (!info || !row) return;
+          instInfoCache[slug] = info;
+          const img = row.querySelector('.b-mod-img img');
+          if (img && info.icon_url) img.src = info.icon_url;
+          const nm = row.querySelector('.bm-name');
+          if (nm && info.title) {
+            nm.textContent = info.title;
+            nm.title = info.title;
+          }
+          if (INST_QUERY && info.title && !info.title.toLowerCase().includes(INST_QUERY)) row.style.display = 'none';
+        };
+        if (instInfoCache[slug]) { enrich(instInfoCache[slug]); return; }
+        api.invoke('modrinth:project', slug).then(enrich).catch(() => {});
       });
     }).catch(err => {
       box.innerHTML = '<div class=\x22b-empty\x22>ERR: ' + escapeHtml((err && err.message) || String(err)) + '</div>';
@@ -1311,14 +1452,15 @@
       <div style="font-family:var(--mc-font-body);font-size:11.5px;color:var(--mc-grey-2);line-height:1.55;max-height:110px;overflow-y:auto">${escapeHtml((h.description || '').slice(0, 600))}</div>
       <div style="font-family:var(--mc-font);font-size:11px;letter-spacing:.08em;color:var(--mc-grey-3);margin:10px 0 6px">ВЕРСИИ ДЛЯ ВАШЕЙ СБОРКИ ${CURRENT_BUILD ? '(' + escapeHtml(CURRENT_BUILD.gameVersion) + ' / ' + escapeHtml(CURRENT_BUILD.loader) + ')' : ''}</div>
       <div style="display:flex;flex-direction:column;gap:6px;max-height:220px;overflow-y:auto" id="mVers"></div>
-    `);
-    const box = $('#mVers');
-    box.innerHTML = '<div class="b-empty">Поиск версий...</div>';
-    if (!CURRENT_BUILD) {
-      box.innerHTML = '<div class="b-empty">Сначала выберите сборку</div>';
-      return;
-    }
-    api.invoke('modrinth:versions', h.slug, CURRENT_BUILD.gameVersion, B_TYPE === 'mod' ? CURRENT_BUILD.loader.toLowerCase() : null).then(vers => {
+    `, false, () => {
+      const box = $('#mVers');
+      if (!box) return;
+      box.innerHTML = '<div class="b-empty">Поиск версий...</div>';
+      if (!CURRENT_BUILD) {
+        box.innerHTML = '<div class="b-empty">Сначала выберите сборку</div>';
+        return;
+      }
+      api.invoke('modrinth:versions', h.slug, CURRENT_BUILD.gameVersion, B_TYPE === 'mod' ? CURRENT_BUILD.loader.toLowerCase() : null).then(vers => {
       const list = Array.isArray(vers) ? vers : [];
       box.innerHTML = '';
       if (!list.length) {
@@ -1348,6 +1490,7 @@
     }).catch(err => {
       box.innerHTML = '<div class="b-empty">Ошибка: ' + escapeHtml(err.message || err) + '</div>';
     });
+    }); // onShow
   }
 
   /* ===== Избранное ===== */
@@ -1670,11 +1813,13 @@
           <div class="mp-body" id="mpBody"></div>
         </div>
       </div>
-    `, true);const mb2 = modal.querySelector('.modal');
+`, true, () => {
+      const mb2 = modal.querySelector('.modal');
     if (mb2) mb2.classList.add('wide');
     if (getCustom().cardLayout === 'center' && mb2) mb2.classList.add('mp-cust-center');
     const fb = $('#mpFavBtn');
     if (fb) fb.addEventListener('click', () => toggleFav(h, fb));
+    });
     api.invoke('modrinth:project', h.slug).then(p => {
       if (!p) return;
       const sub = $('#mpSub');
@@ -1750,9 +1895,12 @@
               <button class="secondary-btn" id="mDepNo" style="margin:0;flex:1">ТОЛЬКО МОД</button>
               <button class="play-btn" id="mDepYes" style="margin:0;flex:1;font-size:14px">С ЗАВИСИМОСТЯМИ</button>
             </div>
-          `);
-          $('#mDepNo').addEventListener('click', () => { modal.classList.remove('show'); installNow(h, version.id, false); });
-          $('#mDepYes').addEventListener('click', () => { modal.classList.remove('show'); installNow(h, version.id, true); });
+          `, false, () => {
+            const dn = $('#mDepNo');
+            if (dn) dn.addEventListener('click', () => { modal.classList.remove('show'); installNow(h, version.id, false); });
+            const dy = $('#mDepYes');
+            if (dy) dy.addEventListener('click', () => { modal.classList.remove('show'); installNow(h, version.id, true); });
+          });
         });
       return;
     }
@@ -1832,25 +1980,25 @@
       <div class="set-row"><div><div class="s-label">ЗАГРУЗЧИК</div><div class="s-desc">Fabric / Forge / NeoForge / Quilt</div></div><select id="bLoader" style="background:var(--mc-grey-5);border:2px solid var(--mc-off-black);color:var(--mc-off-white);padding:7px 10px;font-family:var(--mc-font);font-size:12px;outline:none"><option>Fabric</option><option>Forge</option><option>NeoForge</option><option>Quilt</option></select></div>
       <div class="set-row"><div><div class="s-label">ИКОНКА ПРОФИЛЯ</div><div class="s-desc">Как в официальном лаунчере</div></div><div id="bIconPick" style="display:flex;flex-wrap:wrap;gap:4px;max-width:220px"></div></div>
       <button class="play-btn" id="bCreateBtn" style="font-size:15px;margin-top:16px;letter-spacing:.1em">СОЗДАТЬ СБОРКУ</button>
-    `);
-    let pickedIcon = 'Grass.png';
-    const pick = $('#bIconPick');
-    if (pick && iconNames.length) {
-      pick.innerHTML = '';
-      iconNames.forEach(name => {
-        const img = document.createElement('img');
-        img.src = ic(name);
-        img.style.cssText = 'width:34px;height:34px;image-rendering:pixelated;background:var(--mc-grey-5);border:2px solid var(--mc-off-black);cursor:pointer';
-        img.addEventListener('click', () => {
-          pickedIcon = name;
-          pick.querySelectorAll('img').forEach(i => i.style.borderColor = 'var(--mc-off-black)');
-          img.style.borderColor = 'var(--mc-green-4)';
+    `, false, () => {
+      let pickedIcon = 'Grass.png';
+      const pick = $('#bIconPick');
+      if (pick && iconNames.length) {
+        pick.innerHTML = '';
+        iconNames.forEach(name => {
+          const img = document.createElement('img');
+          img.src = ic(name);
+          img.style.cssText = 'width:34px;height:34px;image-rendering:pixelated;background:var(--mc-grey-5);border:2px solid var(--mc-off-black);cursor:pointer';
+          img.addEventListener('click', () => {
+            pickedIcon = name;
+            pick.querySelectorAll('img').forEach(i => i.style.borderColor = 'var(--mc-off-black)');
+            img.style.borderColor = 'var(--mc-green-4)';
+          });
+          pick.appendChild(img);
         });
-        pick.appendChild(img);
-      });
-    }
-    const btn = $('#bCreateBtn');
-    btn.addEventListener('click', () => {
+      }
+      const btn = $('#bCreateBtn');
+      if (btn) btn.addEventListener('click', () => {
       const name = ($('#bName').value || '').trim();
       const gameVersion = $('#bGameVer').value;
       const loader = $('#bLoader').value;
@@ -1868,7 +2016,8 @@
           btn.textContent = 'СОЗДАТЬ СБОРКУ';
           btn.disabled = false;
         });
-    });
+      });
+    }); // onShow
   }
 
   if ($('#bNewBtn')) {
@@ -2005,10 +2154,17 @@
 
     buildTypeButtons();
     refreshBuilds();
-    api.invoke('update:check').then(u => { if (u && u.version) showUpdateModal(u); });
+    api.invoke('update:check').then(u => {
+      if (u && u.version) showUpdateModal(u);
+      // Если обновления нет — показываем «Что нового» для текущей версии
+      else setTimeout(() => maybeShowNews(APP_VERSION), 900);
+    }).catch(() => setTimeout(() => maybeShowNews(APP_VERSION), 900));
     // Версия лаунчера в статус-баре (реальная, из package.json)
     api.invoke('app:info').then(i => {
-      if (i && i.version) $('#appVersion').textContent = 'v' + i.version + ' · st4amLauncher';
+      if (i && i.version) {
+        APP_VERSION = i.version;
+        $('#appVersion').textContent = 'v' + i.version + ' · st4amLauncher';
+      }
     }).catch(() => { $('#appVersion').textContent = 'st4amLauncher'; });
     // Статус последнего запуска обновления: успех или причина ошибки
     api.invoke('update:status').then(s => {
@@ -2062,18 +2218,20 @@ function showUpdateModal(u) {
         '<button class="play-btn upd-btn" id="updYes">\u041e\u0431\u043d\u043e\u0432\u0438\u0442\u044c \u0441\u0435\u0439\u0447\u0430\u0441</button>' +
         '<button class="secondary-btn upd-btn" id="updNo">\u041f\u043e\u0437\u0436\u0435</button>' +
       '</div>',
-      false
+      false,
+      () => {
+        const yes = $('#updYes');
+        if (yes) yes.addEventListener('click', () => {
+          modal.classList.remove('show');
+          showToast('\u041e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u0435 \u0437\u0430\u043f\u0443\u0449\u0435\u043d\u043e... \u041b\u0430\u0443\u043d\u0447\u0435\u0440 \u0437\u0430\u043a\u0440\u043e\u0435\u0442\u0441\u044f \u0441\u0430\u043c');
+          api.invoke('update:now').then(ok => {
+            if (!ok) showToast('\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0437\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u044c \u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u0435');
+          });
+        });
+        const no = $('#updNo');
+        if (no) no.addEventListener('click', () => modal.classList.remove('show'));
+      }
     );
-    const yes = $('#updYes');
-    if (yes) yes.addEventListener('click', () => {
-      $('#modalBackdrop').classList.remove('show');
-      showToast('\u041e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u0435 \u0437\u0430\u043f\u0443\u0449\u0435\u043d\u043e... \u041b\u0430\u0443\u043d\u0447\u0435\u0440 \u0437\u0430\u043a\u0440\u043e\u0435\u0442\u0441\u044f \u0441\u0430\u043c');
-      api.invoke('update:now').then(ok => {
-        if (!ok) showToast('\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0437\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u044c \u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u0435');
-      });
-    });
-    const no = $('#updNo');
-    if (no) no.addEventListener('click', () => $('#modalBackdrop').classList.remove('show'));
   }
 
   /* ===== Модалка кастомизации (0.2.8) ===== */
@@ -2214,53 +2372,53 @@ function showUpdateModal(u) {
           <button class="secondary-btn" id="custReset" style="align-self:flex-start">СБРОСИТЬ КНОПКИ</button>
         </div>
       </div>
-    `, false);
+    `, false, () => {
+      $$('.cust-tab').forEach(tab => tab.addEventListener('click', () => {
+        $$('.cust-tab').forEach(t => t.classList.toggle('sel', t === tab));
+        $$('.cust-pane').forEach(p => { p.style.display = p.dataset.pane === tab.dataset.tab ? '' : 'none'; });
+      }));
 
-    $$('.cust-tab').forEach(tab => tab.addEventListener('click', () => {
-      $$('.cust-tab').forEach(t => t.classList.toggle('sel', t === tab));
-      $$('.cust-pane').forEach(p => { p.style.display = p.dataset.pane === tab.dataset.tab ? '' : 'none'; });
-    }));
+      initSkinPanel(c);
 
-    initSkinPanel(c);
+      const seg = (id, key, valKey) => {
+        const el = $(id);
+        if (!el) return;
+        el.addEventListener('click', (e) => {
+          const btn = e.target.closest('button');
+          if (!btn) return;
+          const val = btn.dataset[valKey];
+          c[key] = val;
+          el.querySelectorAll('button').forEach(b => b.classList.toggle('sel', b.dataset[valKey] === val));
+          saveCustom(c);
+          setStatus('НАСТРОЙКИ КНОПОК СОХРАНЕНЫ', '');
+        });
+      };
+      seg('#custSizeSeg', 'cardSize', 'size');
+      seg('#custLayoutSeg', 'cardLayout', 'layout');
+      seg('#custHoverSeg', 'hover', 'hover');
 
-    const seg = (id, key, valKey) => {
-      const el = $(id);
-      if (!el) return;
-      el.addEventListener('click', (e) => {
-        const btn = e.target.closest('button');
-        if (!btn) return;
-        const val = btn.dataset[valKey];
-        c[key] = val;
-        el.querySelectorAll('button').forEach(b => b.classList.toggle('sel', b.dataset[valKey] === val));
+      const sw = (id, key) => {
+        const el = $(id);
+        if (!el) return;
+        el.addEventListener('click', () => {
+          c[key] = !c[key];
+          el.classList.toggle('on', c[key]);
+          saveCustom(c);
+          setStatus((c[key] ? 'ВКЛ: ' : 'ВЫКЛ: ') + key.toUpperCase(), '');
+        });
+      };
+      sw('#custAnim', 'cardAnim');
+      sw('#custAccent', 'accentEdges');
+      sw('#custZoom', 'galleryZoom');
+
+      const resetBtns = $('#custReset');
+      if (resetBtns) resetBtns.addEventListener('click', () => {
+        c.cardSize = 'md'; c.cardLayout = 'default'; c.hover = 'lift';
+        c.cardAnim = true; c.accentEdges = true; c.galleryZoom = true;
         saveCustom(c);
-        setStatus('НАСТРОЙКИ КНОПОК СОХРАНЕНЫ', '');
+        openCustModal();
       });
-    };
-    seg('#custSizeSeg', 'cardSize', 'size');
-    seg('#custLayoutSeg', 'cardLayout', 'layout');
-    seg('#custHoverSeg', 'hover', 'hover');
-
-    const sw = (id, key) => {
-      const el = $(id);
-      if (!el) return;
-      el.addEventListener('click', () => {
-        c[key] = !c[key];
-        el.classList.toggle('on', c[key]);
-        saveCustom(c);
-        setStatus((c[key] ? 'ВКЛ: ' : 'ВЫКЛ: ') + key.toUpperCase(), '');
-      });
-    };
-    sw('#custAnim', 'cardAnim');
-    sw('#custAccent', 'accentEdges');
-    sw('#custZoom', 'galleryZoom');
-
-    const resetBtns = $('#custReset');
-    if (resetBtns) resetBtns.addEventListener('click', () => {
-      c.cardSize = 'md'; c.cardLayout = 'default'; c.hover = 'lift';
-      c.cardAnim = true; c.accentEdges = true; c.galleryZoom = true;
-      saveCustom(c);
-      openCustModal();
-    });
+    }); // onShow
   }
 
   init();
