@@ -1476,9 +1476,10 @@ async function importMrpack(filePath, onProgress) {
   }
 }
 
-// Новости лаунчера: берём с GitHub, чтобы не зависеть от серверов Mojang.
-// Файл news.json живёт в корне репозитория — текст можно менять без обновления лаунчера.
-const NEWS_API = 'https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/news.json';
+// Новости лаунчера — свой файл в репозитории (не зависит от Mojang)
+const NEWS_GH = 'https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/news.json';
+// Официальные новости Minecraft: Java Edition и Bedrock
+const NEWS_MOJANG = 'https://launchercontent.mojang.com/v2/news.json';
 function stripTags(s) {
   return String(s || '').replace(/<[^>]*>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#0?39;/g, "'").replace(/&#x27;/g, "'").trim();
 }
@@ -1489,48 +1490,82 @@ function fmtNewsDate(pub) {
   const mm = String(d.getMonth() + 1).padStart(2, '0');
   return dd + '.' + mm + '.' + d.getFullYear();
 }
+function parseNewsText(text) {
+  return String(text || '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|li|h[1-6])>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n\s*\n+/g, '\n')
+    .trim();
+}
+// новости лаунчера из news.json (GitHub)
+function parseGhNews(j) {
+  const out = [];
+  const entries = j && Array.isArray(j.entries) ? j.entries : [];
+  for (const e of entries) {
+    if (out.length >= 15) break;
+    const title = stripTags(e.title || '');
+    if (!title) continue;
+    const text = parseNewsText(e.text);
+    out.push({ title: title, desc: text.slice(0, 900), date: fmtNewsDate(e.date || ''), link: e.link || '', text: text || '', images: [], category: 'launcher' });
+  }
+  return out;
+}
+// новости Mojang: разделяем на Java и Bedrock по newsType
+function parseMojangNews(j, tag) {
+  const out = [];
+  const entries = Array.isArray(j.entries) ? j.entries : [];
+  const seen = new Set();
+  for (const e of entries) {
+    if (out.length >= 15) break;
+    const types = Array.isArray(e.newsType) ? e.newsType : String(e.newsType || '').split(',');
+    if (!types.some(t => t.trim() === tag)) continue;
+    const title = stripTags(e.title || '');
+    if (!title) continue;
+    if (seen.has(title)) continue;
+    seen.add(title);
+    const text = parseNewsText(e.text);
+    const normUrl = (u) => u && u.indexOf('/') === 0 ? 'https://launchercontent.mojang.com' + u : (u || '');
+    const pImg = normUrl(e.playPageImage && e.playPageImage.url);
+    const nImg = normUrl(e.newsPageImage && e.newsPageImage.url);
+    const imgKey = (u) => (u.split('/').pop() || '').replace(/\.[a-z0-9]+$/i, '').replace(/[-_]\d+x\d+$/i, '');
+    const images = [];
+    if (pImg) images.push(pImg);
+    if (nImg && !images.some(x => imgKey(x) === imgKey(nImg))) images.push(nImg);
+    out.push({ title: title, desc: text.slice(0, 900), date: fmtNewsDate(e.date || ''), link: '', text: text || '', images: images, category: tag === 'Java' ? 'java' : 'bedrock' });
+  }
+  return out;
+}
 // кэш новостей на 6 часов — не дёргаем сеть при каждом вызове
-let NEWS_CACHE = { t: 0, data: [] };
+let NEWS_CACHE = { t: 0, data: null };
 async function fetchNews() {
-  if (Date.now() - NEWS_CACHE.t < 6 * 3600 * 1000 && NEWS_CACHE.data.length) return NEWS_CACHE.data;
+  if (Date.now() - NEWS_CACHE.t < 6 * 3600 * 1000 && NEWS_CACHE.data) return NEWS_CACHE.data;
+  const empty = { launcher: [], java: [], bedrock: [] };
   try {
-    const raw = await httpGet(NEWS_API, { Accept: 'application/json' });
-    const buf = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
-    let txt = buf.toString('utf8');
-    if (txt.charCodeAt(0) === 0xFEFF) txt = txt.slice(1);
-    const j = JSON.parse(txt);
-    const out = [];
-    const entries = Array.isArray(j.entries) ? j.entries : [];
-    for (const e of entries) {
-      if (out.length >= 10) break;
-      const title = stripTags(e.title || '');
-      if (!title) continue;
-      const text = String(e.text || '')
-        .replace(/<br\s*\/?>/gi, '\n')
-        .replace(/<\/(p|div|li|h[1-6])>/gi, '\n')
-        .replace(/<[^>]+>/g, ' ')
-        .replace(/&nbsp;/gi, ' ')
-        .replace(/&amp;/gi, '&')
-        .replace(/&quot;/gi, '"')
-        .replace(/&#39;/g, "'")
-        .replace(/&lt;/gi, '<')
-        .replace(/&gt;/gi, '>')
-        .replace(/[ \t]+/g, ' ')
-        .replace(/\n\s*\n+/g, '\n')
-        .trim();
-      const normUrl = (u) => u && u.indexOf('/') === 0 ? 'https://launchercontent.mojang.com' + u : (u || '');
-      const pImg = normUrl(e.playPageImage && e.playPageImage.url);
-      const nImg = normUrl(e.newsPageImage && e.newsPageImage.url);
-      const imgKey = (u) => (u.split('/').pop() || '').replace(/\.[a-z0-9]+$/i, '').replace(/[-_]\d+x\d+$/i, '');
-      const images = [];
-      if (pImg) images.push(pImg);
-      if (nImg && !images.some(x => imgKey(x) === imgKey(nImg))) images.push(nImg);
-      out.push({ title: title, desc: text.slice(0, 900), date: fmtNewsDate(e.date || ''), link: '', text: text || '', images: images });
-    }
+    const [ghRaw, mjRaw] = await Promise.all([
+      httpGet(NEWS_GH, { Accept: 'application/json' }),
+      httpGet(NEWS_MOJANG, { Accept: 'application/json' })
+    ]);
+    const toBuf = (raw) => Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
+    const toJson = (buf) => {
+      let txt = buf.toString('utf8');
+      if (txt.charCodeAt(0) === 0xFEFF) txt = txt.slice(1);
+      return JSON.parse(txt);
+    };
+    const gh = toJson(toBuf(ghRaw));
+    const mj = toJson(toBuf(mjRaw));
+    const out = { launcher: parseGhNews(gh), java: parseMojangNews(mj, 'Java'), bedrock: parseMojangNews(mj, 'Bedrock') };
     NEWS_CACHE.t = Date.now();
     NEWS_CACHE.data = out;
     return out;
-  } catch (e) { log('news fetch error', e.message); try { fs.appendFileSync(process.env.TEMP + '/news_err.log', new Date().toISOString() + ' ' + (e && e.message) + '\n' + ((e && e.stack) || '') + '\n'); } catch (e2) {} return []; }
+  } catch (e) { log('news fetch error', e.message); try { fs.appendFileSync(process.env.TEMP + '/news_err.log', new Date().toISOString() + ' ' + (e && e.message) + '\n' + ((e && e.stack) || '') + '\n'); } catch (e2) {} return empty; }
 }
 function favsFile() { return path.join(ROOT, 'favs.json'); }
 async function loadFavs() {
