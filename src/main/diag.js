@@ -312,6 +312,172 @@ function extractRanges(text) {
   return ranges;
 }
 
+/* ============ Глубокий анализ: пакеты -> моды, цепочка причин ============ */
+
+// Карта пакетов Java -> моды (кто владеет классом)
+const PKG_OWNER = [
+  ['io.wispforest.owo', 'owo-lib'],
+  ['io.wispforest.endec', 'owo-lib'],
+  ['net.fabricmc.fabric.api', 'fabric-api'],
+  ['net.fabricmc.fabric.impl', 'fabric-api'],
+  ['net.fabricmc.fabric.mixin', 'fabric-api'],
+  ['net.fabricmc.fabric', 'fabric-api'],
+  ['org.quiltmc.qsl', 'quilted-fabric-api'],
+  ['dev.latvian.mods.kubejs', 'kubejs'],
+  ['dev.latvian.mods.rhino', 'rhino'],
+  ['software.bernie.geckolib', 'geckolib'],
+  ['me.shedaniel.cloth', 'cloth-config'],
+  ['me.shedaniel.rei', 'roughly-enough-items'],
+  ['me.shedaniel', 'cloth-config'],
+  ['com.terraformersmc.modmenu', 'modmenu'],
+  ['com.terraformersmc', 'modmenu'],
+  ['net.coderbot.iris', 'iris'],
+  ['net.irisshaders', 'iris'],
+  ['me.jellysquid.mods.sodium', 'sodium'],
+  ['net.caffeinemc.mods.sodium', 'sodium'],
+  ['net.caffeinemc', 'sodium'],
+  ['org.embeddedt.embeddium', 'embeddium'],
+  ['org.embeddedt.modernfix', 'modernfix'],
+  ['mtr.mod', 'mtr'],
+  ['net.fabricmc.loader', null],
+  ['net.fabricmc.api', null],
+  ['org.spongepowered.asm', null],
+  ['com.mojang', null],
+  ['net.minecraft', null]
+];
+
+// Определяет мода-владельца Java-класса по пакету
+function classOwner(cls) {
+  const c = String(cls || '').replace(/^knot\/\/|^transformer\//, '');
+  const parts = c.split('.');
+  for (let i = parts.length - 1; i >= 2; i--) {
+    const pkg = parts.slice(0, i).join('.');
+    for (const [p, owner] of PKG_OWNER) {
+      if (pkg === p || pkg.startsWith(p + '.')) return { pkg, owner };
+    }
+  }
+  // эвристика: берём первые два сегмента как «пакет проекта»
+  if (parts.length >= 3) {
+    const two = parts.slice(0, 2).join('.');
+    const three = parts.slice(0, 3).join('.');
+    return { pkg: three, owner: three.split('.').pop() };
+  }
+  return { pkg: c, owner: null };
+}
+
+// Цепочка «Caused by:» из стека — от последней (корневой) причины
+function causedByChain(text) {
+  const out = [];
+  const re = /^Caused by:\s*(.+)$/gm;
+  let m;
+  while ((m = re.exec(text))) out.push(m[1].trim());
+  return out;
+}
+
+// Корневая причина (последний Caused by или первое исключение)
+function rootCause(text) {
+  const chain = causedByChain(text);
+  if (chain.length) return chain[chain.length - 1];
+  const m = /^(?:[a-zA-Z_][\w.$]*?(?:Exception|Error|Throwable)[^:\n]*)/m.exec(text);
+  return m ? m[0] : '';
+}
+
+/* --- Глубокий разбор Mixin-ошибок --- */
+function deepMixin(text) {
+  // 1) Класс, который не удалось трансформировать
+  const tcls = /Mixin transformation of\s+([\w.$]+)\s+failed/.exec(text);
+  // 2) Конкретный сбой инъекции: "... in a.b.c.mixins.json:MixinName from mod X failed ..."
+  const inj = /in\s+([\w.-]+\.mixins\.json):(\w+)\s+from mod\s+([\w.-]+)\s+failed(?: injection check,\s*\((\d+)\/(\d+)\) succeeded)?/i.exec(text);
+  // 3) Цель не найдена
+  const notFound = /Mixin target\s+([\w.$]+)\s+was not found/i.exec(text) ||
+    /Target method\s+'([^']+)'\s+(?:was )?not found in class\s+([\w.$]+)/i.exec(text);
+  // 4) Entrypoint-обёртка: provided by 'X'
+  const entry = /Could not execute entrypoint[^']*'([\w-]+)'|provided by\s*'([\w-]+)'/i.exec(text);
+  if (!tcls && !inj && !notFound) return null;
+
+  const ids = [];
+  let detail = '';
+  let fix = '';
+  const mixinMod = inj ? inj[3] : (entry ? (entry[1] || entry[2]) : null);
+  const targetCls = tcls ? tcls[1] : (notFound ? (notFound[2] || notFound[1]) : null);
+  const targetOwner = targetCls ? classOwner(targetCls) : null;
+
+  if (inj) {
+    const succ = inj[4] && inj[5] ? '(' + inj[4] + '/' + inj[5] + ')' : '';
+    detail = 'Мод "' + inj[3] + '" пытается встроить свой код (миксин ' + inj[2] +
+      ') в класс ' + (targetCls || 'другого мода') +
+      (targetOwner && targetOwner.owner ? ' (это класс мода ' + targetOwner.owner + ')' : '') +
+      ', но не находит там нужный метод' + (succ ? ' — совпадений: ' + succ : '') +
+      '. Это значит, что версия ' + (targetOwner && targetOwner.owner ? targetOwner.owner : 'целевого мода') +
+      ' не подходит версии мода ' + inj[3] + '.';
+    fix = 'Обновите оба мода (' + inj[3] + (targetOwner && targetOwner.owner ? ' и ' + targetOwner.owner : '') +
+      ') до свежих версий. Если обновление не помогло — удалите «' + inj[3] + '»: именно он ломает запуск.';
+  } else if (tcls) {
+    detail = 'Не удалось преобразовать класс ' + tcls[1] +
+      (targetOwner && targetOwner.owner ? ' (класс мода ' + targetOwner.owner + ')' : '') +
+      ' миксином' + (mixinMod ? ' мода ' + mixinMod : '') + ' — код этого класса изменился и не совпадает с ожидаемым.';
+    fix = 'Обновите ' + (targetOwner && targetOwner.owner ? '«' + targetOwner.owner + '»' : 'целевую библиотеку') +
+      (mixinMod ? ' и «' + mixinMod + '»' : '') + '. Если ошибка повторяется — удалите ' + (mixinMod ? '«' + mixinMod + '»' : 'последний установленный мод') + '.';
+  } else if (notFound) {
+    detail = 'Миксин ищет цель ' + (notFound[2] || notFound[1]) + ', которой нет в этой версии игры/мода.';
+    fix = 'Обновите мод-источник миксина или подберите версию под вашу версию Minecraft.';
+  }
+  if (mixinMod) ids.push(mixinMod);
+  if (targetOwner && targetOwner.owner && targetOwner.owner !== mixinMod) ids.push(targetOwner.owner);
+  // дополнительные id в кавычках
+  for (const id of extractQuotedIds(text)) if (!ids.includes(id)) ids.push(id);
+  return { ids, detail, fix };
+}
+
+/* --- Глубокий разбор отсутствующих классов --- */
+function deepNoClass(text) {
+  const cnfe = /java\.lang\.ClassNotFoundException:\s*([\w.$/]+)/g.exec(text);
+  const ncdf = /java\.lang\.NoClassDefFoundError:\s*([$\w./]+)/g.exec(text);
+  const nsm = /java\.lang\.NoSuchMethodError:\s*([\w.$/]+)\.([\w$]+)\(([^)]*)\)/g.exec(text);
+  const nsf = /java\.lang\.NoSuchFieldError:\s*([\w.$/]+)\.([\w$]+)/g.exec(text);
+  let cls = null;
+  let kind = 'class';
+  if (nsm) { cls = nsm[1]; kind = 'method'; }
+  else if (nsf) { cls = nsf[1]; kind = 'field'; }
+  else if (ncdf) { cls = ncdf[1].replace(/\//g, '.').replace(/(\$|.)<init>/, ''); }
+  else if (cnfe) { cls = cnfe[1].replace(/\//g, '.'); }
+  if (!cls) return null;
+  const owner = classOwner(cls);
+  const ids = [];
+  if (owner.owner) ids.push(owner.owner);
+  // кто грузил класс (из стека: at knot//<package>.<Class>) — часто это зависимый мод
+  const loaderRe = /at knot\/\/([\w.$]+)\./g;
+  const seenPkg = new Set();
+  let m;
+  while ((m = loaderRe.exec(text))) {
+    const o = classOwner(m[1]);
+    if (o.owner && !seenPkg.has(o.owner)) seenPkg.add(o.owner);
+  }
+  for (const id of seenPkg) if (!ids.includes(id) && id !== owner.owner) ids.push(id);
+  const what = kind === 'method' ? 'метод' : kind === 'field' ? 'поле' : 'класс';
+  let detail = 'Игре не хватает ' + what + ': ' + cls +
+    (owner.owner ? ' — это часть мода/библиотеки ' + owner.owner : '') + '.';
+  if (kind !== 'class') detail += ' Он есть, но без нужного ' + what + ' — обычно версия библиотеки старее или новее, чем ожидает другой мод.';
+  else detail += ' Обычно это отсутствующая или несовместимая версия API-библиотеки.';
+  const fix = owner.owner
+    ? 'Обновите «' + owner.owner + '» до последней версии' + (seenPkg.size ? ' (его требуют: ' + Array.from(seenPkg).slice(0, 3).join(', ') + ')' : '') + '. Если не поможет — переустановите моды, перечисленные ниже.'
+    : 'Пересоздайте сборку или обновите моды, перечисленные ниже.';
+  return { ids, detail, fix };
+}
+
+/* --- Глубокий разбор Java-версии --- */
+function deepJavaVersion(text) {
+  const m = /UnsupportedClassVersionError:[^\n]*class file version ([0-9]+)\.0/.exec(text);
+  if (!m) return null;
+  const ver = parseInt(m[1], 10);
+  const javaMap = { 52: 8, 55: 11, 56: 12, 57: 13, 58: 14, 59: 15, 60: 16, 61: 17, 62: 18, 63: 19, 64: 20, 65: 21, 66: 22 };
+  const needJava = javaMap[ver] || Math.max(8, ver - 44);
+  return {
+    detail: 'Мод/библиотека собран для Java ' + needJava + ' (class file ' + ver + '.0), а игра запущена на более старой Java.',
+    fix: 'Установите Java ' + needJava + '+ и укажите её в настройках лаунчера (Настройки → Java).'
+  };
+}
+
 /* ============ Основной парсер ============ */
 
 function parse(text) {
@@ -327,6 +493,7 @@ function parse(text) {
     if (actionForMod && !list.length) return;
     candidates.push(Object.assign({ kind, title, detail, ids: list, actionForMod }, extra || {}));
   };
+  void candidates;
 
   /* --- Fabric / Quilt / Forge / NeoForge: отсутствующие моды --- */
   if (
@@ -429,7 +596,7 @@ function parse(text) {
       ids, 'update');
   }
 
-  /* --- Mixin errors --- */
+  /* --- Mixin errors (глубокий разбор) --- */
   if (
     /Mixin apply failed/i.test(src) ||
     /Mixin transformation of/i.test(src) ||
@@ -437,15 +604,21 @@ function parse(text) {
     /Could not load mixin/i.test(src) ||
     /Invalid mixin/i.test(src) ||
     /MixinApplyError/i.test(src) ||
-    /mixinextras/i.test(src)
+    /failed injection check/i.test(src)
   ) {
-    const mixinIds = extractQuotedIds(src);
-    cand('mixin', 'Ошибка Mixin (мод не совместим)',
-      'Сбой микширования кода — обычно из-за несовместимой версии мода. Обновите указанные моды или удалите несовместимый.',
-      mixinIds, mixinIds.length ? 'update' : null);
+    const deep = deepMixin(src);
+    if (deep && deep.ids.length) {
+      cand('mixin', 'Ошибка Mixin — найден виновник', deep.detail, deep.ids, 'update', { fix: deep.fix });
+    } else {
+      const mixinIds = extractQuotedIds(src);
+      const rc = rootCause(src);
+      cand('mixin', 'Ошибка Mixin (мод не совместим)',
+        'Сбой микширования кода' + (rc ? '. Причина: ' + rc : '') + '. Обновите указанные моды или удалите несовместимый.',
+        mixinIds, mixinIds.length ? 'update' : null);
+    }
   }
 
-  /* --- NoClassDefFound / NoSuchMethod (API mismatch) --- */
+  /* --- NoClassDefFound / NoSuchMethod (глубокий разбор) --- */
   if (
     /java\.lang\.NoClassDefFoundError/i.test(src) ||
     /java\.lang\.ClassNotFoundException/i.test(src) ||
@@ -455,10 +628,16 @@ function parse(text) {
     /java\.lang\.LinkageError/i.test(src) ||
     /Could not find or load main class/i.test(src)
   ) {
-    const clsIds = extractQuotedIds(src);
-    cand('no_class', 'Отсутствует класс (библиотека или API)',
-      'Игре не хватает класса — обычно это несовместимая версия библиотеки или API-мода. Обновите подозрительные моды или пересоздайте сборку.',
-      clsIds, clsIds.length ? 'update' : null);
+    const deep = deepNoClass(src);
+    if (deep && deep.ids.length) {
+      cand('no_class', 'Отсутствует класс — найден источник', deep.detail, deep.ids, 'update', { fix: deep.fix });
+    } else {
+      const clsIds = extractQuotedIds(src);
+      const rc = rootCause(src);
+      cand('no_class', 'Отсутствует класс (библиотека или API)',
+        'Игре не хватает класса' + (rc ? '. Причина: ' + rc : '') + '. Обновите подозрительные моды или пересоздайте сборку.',
+        clsIds, clsIds.length ? 'update' : null);
+    }
   }
 
   /* --- Missing libraries / natives --- */
@@ -496,9 +675,10 @@ function parse(text) {
     /Unsupported Java/i.test(src) ||
     /Error occurred during initialization of VM/i.test(src)
   ) {
+    const deep = deepJavaVersion(src);
     cand('no_java', 'Проблема с Java',
-      'Не найдена подходящая Java или она несовместима с этой версией Minecraft. Укажите путь к Java в настройках или установите Java из подсказки.',
-      [], null);
+      deep ? deep.detail : 'Не найдена подходящая Java или она несовместима с этой версией Minecraft. Укажите путь к Java в настройках или установите Java из подсказки.',
+      [], null, { fix: deep ? deep.fix : 'Проверьте настройки Java в лаунчере.' });
   }
 
   /* --- Assets --- */
@@ -577,6 +757,8 @@ function parse(text) {
   for (const c of candidates) {
     if (!merged.has(c.kind)) merged.set(c.kind, Object.assign({}, c, { ids: [] }));
     for (const id of c.ids) if (!merged.get(c.kind).ids.includes(id)) merged.get(c.kind).ids.push(id);
+    if (c.fix && !merged.get(c.kind).fix) merged.get(c.kind).fix = c.fix;
+    if (c.detail) merged.get(c.kind).detail = c.detail; // последний (самый глубокий) detail
   }
 
   // Loader crash — только как фолбэк, если конкретных проблем не нашли
@@ -600,7 +782,7 @@ function parse(text) {
 
   const problems = [];
   for (const c of merged.values()) {
-    problems.push({ kind: c.kind, title: c.title, detail: c.detail, modIds: c.ids, actionForMod: c.actionForMod, relations, ranges });
+    problems.push({ kind: c.kind, title: c.title, detail: c.detail, fix: c.fix || null, modIds: c.ids, actionForMod: c.actionForMod, relations, ranges });
   }
 
   return resolveAll(problems, new Resolver());
@@ -634,7 +816,7 @@ async function resolveAll(problems, resolver) {
       if (ranges[id] || ranges[key]) entry.needVersion = ranges[id] || ranges[key];
       modsList.push(entry);
     }
-    out.push({ kind: p.kind, title: p.title, detail: p.detail, mods: modsList });
+    out.push({ kind: p.kind, title: p.title, detail: p.detail, fix: p.fix || null, mods: modsList });
   }
   return out;
 }
