@@ -4,7 +4,7 @@
         {
             "path": "src/main/diag.js",
             "url": "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/main/diag.js",
-            "sha256": "d2d1c21c9b0f15aee35a3a79bdb63a082adb51a41449aa396a0ab89d5d558ab8"
+            "sha256": "2b672f8bb40727a82b302964a3e68386c47b989d89ae3403a02d116974617fc7"
         },
         {
             "path": "src/main/launcher.js",
@@ -39,7 +39,7 @@
         {
             "path": "src/renderer/app.js",
             "url": "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/renderer/app.js",
-            "sha256": "6cc763e31f7864a970928aaec9c32e5263e7e226b4fe80905653fc8624e10391"
+            "sha256": "109c214797e105c87605e26d6b075e30bad5b0516bd1ddec21bb2d1b5eb60bee"
         },
         {
             "path": "src/renderer/icon.png",
@@ -54,7 +54,7 @@
         {
             "path": "src/renderer/index.html",
             "url": "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/renderer/index.html",
-            "sha256": "1bd71b58aaef2d42da17449532e2be8540efd91bc660d75790b87f0356c5366d"
+            "sha256": "fc39e3d3220a2f4b0986d8623749e6d66ddc7a28b8493803c873a0797d6d1ccc"
         },
         {
             "path": "src/renderer/skins.js",
