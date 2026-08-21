@@ -19,6 +19,11 @@
   let APP_VERSION = '';
   const WHATSNEW_URL = 'https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/whatsnew.json';
   const NEWS_NOTES = {
+    '3.0.2': '3.0.2 — импорт .mrpack и удобство.\n\n' +
+      '1) ИМПОРТ МОДПАКОВ .mrpack ПОЧИНЕН\nВерсия игры теперь берётся из манифеста модпака (раньше подставлялась версия самого пакета — сборка получалась нерабочей). Установка лоадера показывает прогресс по этапам и не блокирует импорт при ошибке.\n\n' +
+      '2) УМНОЕ КОПИРОВАНИЕ МОДОВ\nПри импорте лаунчер находит уже скачанные моды в ваших сборках (совпадает версия игры) и копирует их вместо повторного скачивания.\n\n' +
+      '3) РЕДАКТИРОВАНИЕ СБОРКИ\nКнопка «Изменить» в шапке сборки: переименуйте её, смените готовую иконку или загрузите свою картинку.\n\n' +
+      '4) НОВОСТИ ПО ДАТЕ\nСвежие новости сверху. В Java-ленте — новые версии игры и снапшоты.',
     '3.0.1': '3.0.1 — умная диагностика и понятные версии модов.\n\n' +
       '1) УМНЫЙ АНАЛИЗ ОШИБОК ЗАПУСКА\n' +
       'Если игра не запустилась, лаунчер теперь разбирает краш-отчёт глубоко и показывает РЕАЛЬНУЮ причину: какой мод виноват, с чем конфликтует и что именно сломалось. И главное — блок «КАК ИСПРАВИТЬ» с конкретными шагами.\n\n' +
@@ -415,6 +420,14 @@
   ];
   const NEWS_ICONS = ['Diamond_Ore.png', 'Gold_Ore.png', 'Iron_Ore.png', 'Redstone_Ore.png'];
   const CAT_LABEL = { launcher: 'ЛАУНЧЕР', java: 'JAVA', bedrock: 'BEDROCK' };
+  // даты в формате DD.MM.YYYY — свежие сверху
+  function sortByDateDesc(arr) {
+    const ts = (d) => {
+      const m = /^(\d{2})\.(\d{2})\.(\d{4})/.exec(String(d || ''));
+      return m ? +m[3] * 1e4 + +m[2] * 100 + +m[1] : 0;
+    };
+    return (arr || []).slice().sort((a, b) => ts(b.date) - ts(a.date));
+  }
   function buildNews() {
     const mk = (n, i) => {
       const isArr = Array.isArray(n);
@@ -458,11 +471,12 @@
       const l = (data && Array.isArray(data.launcher)) ? data.launcher : [];
       const jv = (data && Array.isArray(data.java)) ? data.java : [];
       const bd = (data && Array.isArray(data.bedrock)) ? data.bedrock : [];
-      state.launcher = l;
-      state.java = jv;
-      state.bedrock = bd;
-      const jvKeys = new Set(jv.map(x => x.title));
-      state.all = l.concat(jv).concat(bd.filter(x => !jvKeys.has(x.title)));
+      state.launcher = sortByDateDesc(l);
+      state.java = sortByDateDesc(jv);
+      state.bedrock = sortByDateDesc(bd);
+      const jvKeys = new Set(state.java.map(x => x.title));
+      // общая лента — строго по дате (свежие сверху)
+      state.all = sortByDateDesc(state.launcher.concat(state.java).concat(state.bedrock.filter(x => !jvKeys.has(x.title))));
       render();
     }).catch(() => {
       state.all = NEWS;
@@ -1264,6 +1278,7 @@
             <span class="b-tag">${b.modCount || 0} модов</span>
           </div>
         </div>
+        <button class="b-mini play" id="bdEdit" title="Изменить название и иконку" style="align-self:flex-start;padding:8px 14px">&#9998; ИЗМЕНИТЬ</button>
       </div>
       <div class="bd-btns">
         <button class="b-mini play" id="bdPlay">&#9654; ИГРАТЬ</button>
@@ -1281,6 +1296,8 @@
       launchBuild(b);
     });
     syncPlayButtons();
+    const be = $('#bdEdit');
+    if (be) be.addEventListener('click', () => openEditBuildModal(b));
     $('#bdExport').addEventListener('click', handleExport);
     $('#bdImport').addEventListener('click', handleImport);
     $('#bdDel').addEventListener('click', () => {
@@ -1289,6 +1306,84 @@
         setStatus('СБОРКА УДАЛЕНА: ' + b.name, '');
         refreshBuilds();
       }).catch(err => setStatus('ОШИБКА: ' + err.message, 'busy'));
+    });
+  }
+
+  // Редактирование сборки: название и иконка
+  function openEditBuildModal(b) {
+    openModal('ИЗМЕНИТЬ СБОРКУ', `
+      <div class="set-row"><div><div class="s-label">НАЗВАНИЕ</div><div class="s-desc">Как сборка называется в списке</div></div>
+        <input id="ebName" value="${escapeHtml(b.name || '')}" maxlength="48" style="background:var(--mc-grey-5);border:2px solid var(--mc-off-black);color:var(--mc-off-white);padding:7px 10px;font-family:var(--mc-font);font-size:12px;outline:none;width:220px"/>
+      </div>
+      <div class="set-row"><div><div class="s-label">ИКОНКА</div><div class="s-desc">Выберите из готовых или загрузите свою</div></div><div id="ebIconPick" style="display:flex;flex-wrap:wrap;gap:4px;max-width:240px"></div></div>
+      <div style="display:flex;align-items:center;gap:10px;margin-top:10px">
+        <img id="ebCustomPrev" src="" alt="" style="display:none;width:44px;height:44px;image-rendering:auto;background:var(--mc-grey-5);border:2px solid var(--mc-green-4)"/>
+        <button class="b-mini" id="ebCustomBtn" style="padding:8px 12px">&#128247; СВОЯ ИКОНКА</button>
+        <input type="file" id="ebCustomFile" accept="image/png,image/jpeg,image/webp" style="display:none"/>
+        <span id="ebCustomHint" style="font-family:var(--mc-font-body);font-size:10.5px;color:var(--mc-grey-3)">PNG/JPG, до ~400 КБ</span>
+      </div>
+      <button class="play-btn" id="ebSave" style="font-size:14px;margin-top:14px;width:100%;letter-spacing:.1em">СОХРАНИТЬ</button>
+    `, false, () => {
+      const mb = modal.querySelector('.modal');
+      if (mb) mb.style.width = '560px';
+      let pickedIcon = b.icon || 'Grass.png';
+      let customIcon = null; // dataURL своей иконки
+      const pick = $('#ebIconPick');
+      const iconNames = Object.keys(typeof __I !== 'undefined' ? __I : {});
+      if (pick && iconNames.length) {
+        pick.innerHTML = '';
+        iconNames.forEach(name => {
+          const img = document.createElement('img');
+          img.src = ic(name);
+          img.style.cssText = 'width:34px;height:34px;image-rendering:pixelated;background:var(--mc-grey-5);border:2px solid ' + (!customIcon && name === pickedIcon ? 'var(--mc-green-4)' : 'var(--mc-off-black)') + ';cursor:pointer';
+          img.addEventListener('click', () => {
+            pickedIcon = name;
+            customIcon = null;
+            const prev = $('#ebCustomPrev');
+            if (prev) { prev.style.display = 'none'; prev.src = ''; }
+            pick.querySelectorAll('img').forEach(i => i.style.borderColor = 'var(--mc-off-black)');
+            img.style.borderColor = 'var(--mc-green-4)';
+          });
+          pick.appendChild(img);
+        });
+      }
+      const fileInput = $('#ebCustomFile');
+      const cb = $('#ebCustomBtn');
+      if (cb && fileInput) {
+        cb.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', () => {
+          const f = fileInput.files && fileInput.files[0];
+          if (!f) return;
+          if (f.size > 400 * 1024) { setStatus('ИКОНКА СЛИШКОМ БОЛЬШАЯ (ДО 400 КБ)', 'busy'); return; }
+          const rd = new FileReader();
+          rd.onload = () => {
+            customIcon = String(rd.result || '');
+            pickedIcon = null;
+            const prev = $('#ebCustomPrev');
+            if (prev) { prev.src = customIcon; prev.style.display = ''; }
+            if (pick) pick.querySelectorAll('img').forEach(i => i.style.borderColor = 'var(--mc-off-black)');
+            setStatus('СВОЯ ИКОНКА ВЫБРАНА', '');
+          };
+          rd.readAsDataURL(f);
+        });
+      }
+      const btn = $('#ebSave');
+      if (btn) btn.addEventListener('click', () => {
+        const name = ($('#ebName').value || '').trim();
+        if (!name) { setStatus('ВВЕДИТЕ НАЗВАНИЕ', 'busy'); return; }
+        const icon = customIcon || pickedIcon || b.icon;
+        btn.disabled = true;
+        btn.textContent = 'СОХРАНЕНИЕ...';
+        api.invoke('builds:update-meta', b.id, { name, icon }).then(nb => {
+          modal.classList.remove('show');
+          setStatus('СБОРКА ОБНОВЛЕНА: ' + nb.name, '');
+          refreshBuilds().then(() => selectBuild(b.id));
+        }).catch(err => {
+          setStatus('ОШИБКА: ' + (err.message || err), 'busy');
+          btn.disabled = false;
+          btn.textContent = 'СОХРАНИТЬ';
+        });
+      });
     });
   }
 
