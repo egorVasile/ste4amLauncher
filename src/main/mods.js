@@ -245,6 +245,25 @@ async function buildsList() {
   return builds;
 }
 
+// Обновление названия/иконки сборки (редактирование из UI)
+async function updateBuildMeta(id, meta) {
+  const builds = await loadBuilds();
+  const b = builds.find(x => x.id === id);
+  if (!b) throw new Error('Сборка не найдена');
+  if (meta && typeof meta.name === 'string' && meta.name.trim()) {
+    b.name = meta.name.trim().slice(0, 48);
+  }
+  if (meta && typeof meta.icon === 'string') {
+    if (/^[\w.-]+\.png$/i.test(meta.icon)) b.icon = meta.icon;
+    // кастомная иконка: PNG/JPG в base64 (до ~400 КБ)
+    else if (/^data:image\/(png|jpeg|jpg);base64,[A-Za-z0-9+/=]+$/.test(meta.icon) && meta.icon.length < 560000) {
+      b.icon = meta.icon;
+    }
+  }
+  await saveBuilds(builds);
+  return b;
+}
+
 async function countMods(id, type) {
   const d = type === 'mod' ? modsDir(id) : packsDir(id, type);
   try {
@@ -282,16 +301,20 @@ async function buildCreate({ name, gameVersion, loader, icon, onProgress }) {
   return b;
 }
 
-async function installLoader(build, gameVersion, loader, onProgress) {
+async function installLoader(build, gameVersion, loader, onProgress, preferVer) {
   const L = loader.toLowerCase();
   if (L === 'fabric' || L === 'quilt') {
     const meta = L === 'fabric' ? FABRIC_META : QUILT_META;
     const url = L === 'fabric'
       ? `${FABRIC_META}/versions/loader/${gameVersion}`
       : `${QUILT_META}/versions/loader/${gameVersion}`;
+    if (onProgress) onProgress(0.1, 'Список версий ' + L + '...');
     const list = await cachedJson(url, 'loader-list-' + L + '-' + gameVersion + '.json', CACHE_TTL.loaderList);
     if (!list.length) throw new Error('Нет загрузчиков для ' + gameVersion);
-    const loaderVer = list[0].loader.version;
+    // приоритет: версия из манифеста модпака, иначе самая свежая
+    const want = String(preferVer || '').trim();
+    const loaderVer = (want && list.some(x => x.loader && x.loader.version === want)) ? want : list[0].loader.version;
+    if (onProgress) onProgress(0.35, 'Профиль ' + L + ' ' + loaderVer + '...');
     const profileUrl = `${meta}/versions/loader/${gameVersion}/${loaderVer}/profile/json`;
     const profile = await cachedJson(profileUrl, 'loader-profile-' + L + '-' + gameVersion + '-' + loaderVer + '.json', CACHE_TTL.profile);
     profile.id = build.id;
@@ -310,7 +333,9 @@ async function installLoader(build, gameVersion, loader, onProgress) {
         delete lib.size; delete lib.sha1; delete lib.md5; delete lib.url;
       }
     }
+    if (onProgress) onProgress(0.75, 'Файлы версии ' + gameVersion + '...');
     await writeVersionJson(build, gameVersion, profile);
+    if (onProgress) onProgress(1, 'Загрузчик установлен');
     return profile;
   }
   if (L === 'neoforge' || L === 'forge') {
@@ -1371,7 +1396,7 @@ async function importMrpack(filePath, onProgress) {
     // фолбэк — Expand-Archive, но ему нужно расширение .zip
     let okZip = await execOut('tar', ['-xf', filePath, '-C', tmp]);
     if (!okZip) {
-      const zipCopy = tmp + '.zip';
+      let zipCopy = tmp + '.zip';
       try { await fsp.copyFile(filePath, zipCopy); } catch (e) { zipCopy = null; }
       if (zipCopy) {
         okZip = await execOut('powershell.exe', [
@@ -1400,7 +1425,9 @@ async function importMrpack(filePath, onProgress) {
     else if (deps.forge) loader = 'forge';
     else if (deps['quilt-loader']) loader = 'quilt';
     else if (deps['fabric-loader']) loader = 'fabric';
-    const gameVersion = String(manifest.versionId);
+    // ВАЖНО: версия Minecraft берётся из dependencies.minecraft.
+    // manifest.versionId — это версия САМОГО МОДПАКА (например «1.0.0»), не игры!
+    const gameVersion = String(deps.minecraft || '').trim() || String(manifest.versionId || '').trim();
 
     const builds = await loadBuilds();
     const id = 'build-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6);
@@ -1419,42 +1446,125 @@ async function importMrpack(filePath, onProgress) {
     await fsp.mkdir(path.join(bdir, 'game', 'datapacks'), { recursive: true });
     await fsp.mkdir(path.join(bdir, 'game'), { recursive: true });
 
-    if (loader) {
-      if (onProgress) onProgress(0, 'Установка ' + loader + ' ' + gameVersion + '...');
-      await installLoader(b, gameVersion, loader, (fr) => onProgress && onProgress(fr * 0.15, 'Установка ' + loader + '...'));
-    }
+    // Сборка сохраняется СРАЗУ — даже если установка лоадера упадёт,
+    // сборка не потеряется, а моды продолжат ставиться
     builds.unshift(b);
     await saveBuilds(builds);
+
+    if (loader) {
+      if (onProgress) onProgress(0, 'Установка ' + loader + ' ' + gameVersion + '...');
+      const preferKey = loader === 'fabric' ? 'fabric-loader' : (loader === 'quilt' ? 'quilt-loader' : null);
+      try {
+        await installLoader(b, gameVersion, loader, (fr, stage) => onProgress && onProgress(Math.min(fr * 0.15, 0.15), stage || ('Установка ' + loader + '...')), preferKey ? deps[preferKey] : null);
+      } catch (e) {
+        log('mrpack loader install failed:', e && e.message);
+        if (onProgress) onProgress(0.15, 'Лоадер не установлен (' + ((e && e.message) || 'ошибка') + ') — продолжаем');
+      }
+    }
 
     // Файлы: качаем только в знакомые папки сборки (mods/, resourcepacks/...);
     // остальное (config и т.п.) приходит через overrides ниже
     const files = Array.isArray(manifest.files) ? manifest.files : [];
+
+    // --- Переиспользование: индекс модов из ДРУГИХ сборок с той же версией игры ---
+    // Если нужный файл уже скачан в другую сборку (совпадает sha1 или имя файла),
+    // копируем его вместо повторного скачивания.
+    const sha1OfFile = (p) => new Promise((resolve) => {
+      try {
+        const h = crypto.createHash('sha1');
+        const s = fs.createReadStream(p);
+        s.on('data', (c) => h.update(c));
+        s.on('end', () => resolve(h.digest('hex')));
+        s.on('error', () => resolve(null));
+      } catch (e) { resolve(null); }
+    });
+    const libCacheFile = path.join(ROOT, 'cache', 'modlib.json');
+    let libCache = {};
+    try { libCache = JSON.parse(await fsp.readFile(libCacheFile, 'utf8')) || {}; } catch (e) {}
+    const bySha = new Map();
+    const byName = new Map();
+    try {
+      const allBuilds = await loadBuilds();
+      for (const ob of allBuilds) {
+        if (!ob.gameVersion || String(ob.gameVersion) !== gameVersion) continue;
+        const obd = buildDir(ob.id);
+        for (const sub of ['mods', 'resourcepacks', 'shaderpacks', 'datapacks']) {
+          let names = [];
+          try { names = await fsp.readdir(path.join(obd, 'game', sub)); } catch (e) { continue; }
+          for (const n of names) {
+            if (!/\.(jar|zip)$/i.test(n)) continue;
+            const fp = path.join(obd, 'game', sub, n);
+            if (byName.has(n)) byName.get(n).push(fp); else byName.set(n, [fp]);
+          }
+        }
+      }
+      // считаем sha1 (с кэшем по размеру+mtime, чтобы не пересчитывать каждый раз)
+      const allCandidates = [...new Set([].concat(...byName.values()))];
+      for (let i = 0; i < allCandidates.length; i++) {
+        const fp = allCandidates[i];
+        let st = null;
+        try { st = await fsp.stat(fp); } catch (e) { continue; }
+        const key = fp.replace(/\\/g, '/');
+        const cached = libCache[key];
+        if (cached && cached.size === st.size && cached.mtime === st.mtimeMs && cached.sha1) {
+          if (!bySha.has(cached.sha1)) bySha.set(cached.sha1, fp);
+          continue;
+        }
+        const sh = await sha1OfFile(fp);
+        if (sh) {
+          libCache[key] = { size: st.size, mtime: st.mtimeMs, sha1: sh };
+          if (!bySha.has(sh)) bySha.set(sh, fp);
+        }
+        if (onProgress && i % 10 === 0) onProgress(0, 'Поиск локальных копий модов (' + i + '/' + allCandidates.length + ')...');
+      }
+      await fsp.mkdir(path.dirname(libCacheFile), { recursive: true });
+      await fsp.writeFile(libCacheFile, JSON.stringify(libCache)).catch(() => {});
+    } catch (e) { log('modlib index error', e && e.message); }
+
     const SAFE_PREFIX = ['mods/', 'resourcepacks/', 'shaderpacks/', 'datapacks/'];
     const total = files.length;
     let done = 0;
+    let copied = 0;
     const reg = { mod: [], resourcepack: [], shaderpack: [], datapack: [] };
     for (const f of files) {
       done++;
       const p = String(f.path || '');
-      if (onProgress) onProgress(done / total, p);
       if (!SAFE_PREFIX.some(pre => p.startsWith(pre))) continue;
       const dest = path.join(bdir, 'game', p.split('/').join(path.sep));
-      const urls = Array.isArray(f.downloads) ? f.downloads.filter(u => typeof u === 'string' && u) : [];
-      if (!urls.length) continue;
-      let lastErr = null;
-      let ok = false;
-      for (const u of urls) {
-        try { await downloadFile(u, dest, () => {}); ok = true; break; }
-        catch (e) { lastErr = e; }
+      if (onProgress) onProgress(done / total, (copied ? '[скопировано ' + copied + '] ' : '') + p);
+      const sha1 = f.hashes && f.hashes.sha1 ? String(f.hashes.sha1) : null;
+      // 1) пробуем найти локальную копию по sha1, затем по имени файла
+      let localSrc = (sha1 && bySha.get(sha1)) || null;
+      if (!localSrc) {
+        const cands = byName.get(path.basename(p)) || [];
+        if (cands.length) localSrc = cands[0];
       }
-      if (!ok) { log('mrpack file error', p, lastErr && lastErr.message); continue; }
+      if (localSrc) {
+        try {
+          await fsp.mkdir(path.dirname(dest), { recursive: true });
+          await fsp.copyFile(localSrc, dest);
+          copied++;
+        } catch (e) { localSrc = null; }
+      }
+      // 2) иначе скачиваем
+      if (!localSrc) {
+        const urls = Array.isArray(f.downloads) ? f.downloads.filter(u => typeof u === 'string' && u) : [];
+        if (!urls.length) continue;
+        let lastErr = null;
+        let ok = false;
+        for (const u of urls) {
+          try { await downloadFile(u, dest, () => {}); ok = true; break; }
+          catch (e) { lastErr = e; }
+        }
+        if (!ok) { log('mrpack file error', p, lastErr && lastErr.message); continue; }
+      }
       // Запоминаем проект в реестр (для будущего экспорта) по sha1 из манифеста
       const type = p.startsWith('mods/') ? 'mod'
         : p.startsWith('resourcepacks/') ? 'resourcepack'
         : p.startsWith('shaderpacks/') ? 'shaderpack' : 'datapack';
       try {
-        if (f.hashes && f.hashes.sha1) {
-          const mrf = await findModrinthByHash(f.hashes.sha1);
+        if (sha1) {
+          const mrf = await findModrinthByHash(sha1);
           if (mrf && mrf.project_id) reg[type].push({ projectId: mrf.project_id, filename: path.basename(p) });
         }
       } catch (e) {}
@@ -1480,6 +1590,8 @@ async function importMrpack(filePath, onProgress) {
 const NEWS_GH = 'https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/news.json';
 // Официальные новости Minecraft: Java Edition и Bedrock
 const NEWS_MOJANG = 'https://launchercontent.mojang.com/v2/news.json';
+// Патчноуты версий Java Edition (релизы и снапшоты) — «новые версии» в ленте Java
+const NEWS_JPATCH = 'https://launchercontent.mojang.com/v2/javaPatchNotes.json';
 function stripTags(s) {
   return String(s || '').replace(/<[^>]*>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#0?39;/g, "'").replace(/&#x27;/g, "'").trim();
 }
@@ -1518,6 +1630,22 @@ function parseGhNews(j) {
   }
   return out;
 }
+// Патчноуты новых версий Java Edition (релизы/снапшоты) — для ленты JAVA
+function parsePatchNotes(j) {
+  const out = [];
+  const entries = j && Array.isArray(j.entries) ? j.entries : [];
+  for (const e of entries) {
+    if (out.length >= 15) break;
+    const version = stripTags(e.version || '');
+    if (!version) continue;
+    const isSnap = String(e.type || '') === 'snapshot';
+    const title = (isSnap ? 'Снапшот ' : 'Вышла версия ') + version;
+    const text = parseNewsText(e.shortText || e.title || '');
+    const img = e.image && typeof e.image.url === 'string' ? (e.image.url.startsWith('/') ? 'https://launchercontent.mojang.com' + e.image.url : e.image.url) : '';
+    out.push({ title, desc: text.slice(0, 900), date: fmtNewsDate(e.date || ''), link: '', text: text || '', images: img ? [img] : [], category: 'java', kind: isSnap ? 'snapshot' : 'release' });
+  }
+  return out;
+}
 // новости Mojang: разделяем на Java и Bedrock по newsType
 function parseMojangNews(j, tag) {
   const out = [];
@@ -1549,9 +1677,10 @@ async function fetchNews() {
   if (Date.now() - NEWS_CACHE.t < 6 * 3600 * 1000 && NEWS_CACHE.data) return NEWS_CACHE.data;
   const empty = { launcher: [], java: [], bedrock: [] };
   try {
-    const [ghRaw, mjRaw] = await Promise.all([
+    const [ghRaw, mjRaw, jpRaw] = await Promise.all([
       httpGet(NEWS_GH, { Accept: 'application/json' }),
-      httpGet(NEWS_MOJANG, { Accept: 'application/json' })
+      httpGet(NEWS_MOJANG, { Accept: 'application/json' }),
+      httpGet(NEWS_JPATCH, { Accept: 'application/json' })
     ]);
     const toBuf = (raw) => Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
     const toJson = (buf) => {
@@ -1561,7 +1690,18 @@ async function fetchNews() {
     };
     const gh = toJson(toBuf(ghRaw));
     const mj = toJson(toBuf(mjRaw));
-    const out = { launcher: parseGhNews(gh), java: parseMojangNews(mj, 'Java'), bedrock: parseMojangNews(mj, 'Bedrock') };
+    let jp = [];
+    try { jp = parsePatchNotes(toJson(toBuf(jpRaw))); } catch (e) {}
+    // Java = обычные новости + новые версии/снапшоты (без дублей по заголовку)
+    const javaNews = parseMojangNews(mj, 'Java');
+    const seenT = new Set(javaNews.map(x => x.title.toLowerCase()));
+    for (const pn of jp) if (!seenT.has(pn.title.toLowerCase())) javaNews.push(pn);
+    javaNews.sort((a, b) => {
+      const ts = (d) => { const m = /^(\d{2})\.(\d{2})\.(\d{4})/.exec(String(d || '')); return m ? +m[3] * 1e4 + +m[2] * 100 + +m[1] : 0; };
+      return ts(b.date) - ts(a.date);
+    });
+    if (javaNews.length > 20) javaNews.length = 20;
+    const out = { launcher: parseGhNews(gh), java: javaNews, bedrock: parseMojangNews(mj, 'Bedrock') };
     NEWS_CACHE.t = Date.now();
     NEWS_CACHE.data = out;
     return out;
@@ -1593,6 +1733,7 @@ module.exports = {
   mrSearch, mrProject, mrProjectVersions, mrVersion, mrCategories, mrLoaders, mrGameVersions,
   mrBatchProjects, mrBatchVersions,
   buildsList, buildCreate, deleteBuild, installedMods, installProject, deleteMod,
+  updateBuildMeta,
   loadInstalled,
   exportBuild, importBuild, importMrpack, findModrinthByHash, packConfigs, unpackConfigs,
   findJava, findJavaMajor, javaCandidates, javaMajor, ensureJavaRuntime,
