@@ -284,6 +284,11 @@ function registerIpc() {
     emit('builds:changed', {});
     return ok;
   });
+  ipcMain.handle('builds:update-meta', async (_e, id, meta) => {
+    const out = await mods.updateBuildMeta(id, meta || {});
+    emit('builds:changed', {});
+    return out;
+  });
   ipcMain.handle('builds:installed', (_e, id, type) => mods.installedMods(id, type));
   ipcMain.handle('builds:registry', (_e, id) => mods.loadInstalled(id));
 ipcMain.handle('news:fetch', () => mods.fetchNews());
