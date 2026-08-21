@@ -979,7 +979,8 @@
       html += `
         <div style="border:2px solid var(--mc-off-black);background:var(--mc-grey-5);padding:10px 12px;border-left:6px solid ${meta.color}">
           <div style="font-family:var(--mc-font);font-size:13px;letter-spacing:.06em;color:${meta.color}">${meta.label}</div>
-          <div style="font-family:var(--mc-font-body);font-size:11px;color:var(--mc-grey-2);margin-top:3px;line-height:1.45">${escapeHtml(p.detail)}</div>`;
+          <div style="font-family:var(--mc-font-body);font-size:11px;color:var(--mc-grey-2);margin-top:3px;line-height:1.45">${escapeHtml(p.detail)}</div>
+          ${p.fix ? `<div style="border-left:3px solid var(--mc-green-4);background:rgba(60,133,39,.12);padding:7px 10px;margin-top:8px;font-family:var(--mc-font-body);font-size:11px;color:var(--mc-grey-1);line-height:1.5"><span style="color:var(--mc-green-2);font-weight:600">КАК ИСПРАВИТЬ:</span> ${escapeHtml(p.fix)}</div>` : ''}`;
       if (p.mods && p.mods.length) {
         html += '<div style="display:flex;flex-direction:column;gap:6px;margin-top:9px">';
         p.mods.forEach(m => {
@@ -1765,6 +1766,9 @@
         return { list, needed: pid ? (reqs[pid] || []) : [] };
       })
     ).then(({ list, needed }) => {
+      // Сначала релизы, потом беты, потом альфы (внутри группы — по дате, как отдал Modrinth)
+      const TYPE_ORDER = { release: 0, beta: 1, alpha: 2 };
+      list.sort((a, b) => (TYPE_ORDER[(a.version_type || '').toLowerCase()] ?? 3) - (TYPE_ORDER[(b.version_type || '').toLowerCase()] ?? 3));
       box.innerHTML = '';
       if (!list.length) {
         box.innerHTML = '<div class="b-empty">Нет версий для ' + escapeHtml(CURRENT_BUILD.gameVersion) + (itemType(h) === 'mod' ? ' / ' + escapeHtml(CURRENT_BUILD.loader) : '') + '</div>';
@@ -1784,7 +1788,9 @@
         const f = (v.files || []).find(x => x.primary) || (v.files || [])[0];
         const mb = f && f.size ? (f.size / 1048576).toFixed(1) + ' MB' : '';
         const date = fmtDate(v.date_published);
-        const type = v.version_type ? (v.version_type.charAt(0).toUpperCase() + v.version_type.slice(1)) : '';
+        const VT_META = { release: { t: 'РЕЛИЗ', bg: '#3c8527' }, beta: { t: 'БЕТА', bg: '#e8862c' }, alpha: { t: 'АЛЬФА', bg: '#1e6eea' } };
+        const vm = VT_META[(v.version_type || '').toLowerCase()];
+        const typeBadge = vm ? `<span class="ver-badge" style="background:${vm.bg}">${vm.t}</span>` : '';
         const gvs = (v.game_versions || []).slice(0, 3).join(', ') + ((v.game_versions || []).length > 3 ? '...' : '');
         // подсветка: нужная по диагнозу ИЛИ требуемая установленным модом
         const need = versionNeed(specificNeeded, v);
@@ -1801,7 +1807,7 @@
         row.innerHTML = `
           <div style="display:flex;flex-direction:column;gap:3px;min-width:0">
             <div class="bm-name">${escapeHtml(gvs)} &middot; ${escapeHtml((v.loaders || []).join('/'))} ${tags}</div>
-            <div class="bm-meta">${type ? escapeHtml(type) + ' &middot; ' : ''}${date}${mb ? ' &middot; ' + mb : ''}</div>
+            <div class="bm-meta">${typeBadge}${date}${mb ? ' &middot; ' + mb : ''}</div>
           </div>
           <div style="display:flex;flex-direction:column;gap:4px;margin-top:2px">
             <button class="b-mini play" data-dep="0" style="width:100%">\u0423\u0441\u0442\u0430\u043d\u043e\u0432\u0438\u0442\u044c</button>
@@ -1910,6 +1916,35 @@
   }
 
   function doInstall(h, version, withDeps) {
+    const vt = (version.version_type || '').toLowerCase();
+    if (vt === 'beta' || vt === 'alpha') {
+      const label = vt === 'beta' ? 'БЕТА' : 'АЛЬФА';
+      const vnum = version.version_number || '';
+      openModal('Нестабильная версия', `
+        <div style="font-family:var(--mc-font-body);font-size:12px;line-height:1.6;color:var(--mc-grey-2)">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+            <span class="ver-badge" style="background:${vt === 'beta' ? '#e8862c' : '#1e6eea'}">${label}</span>
+            <span style="font-family:var(--mc-font);color:var(--mc-off-white);font-size:13px">${escapeHtml(vnum)}</span>
+          </div>
+          Версия мода <b style="color:var(--mc-off-white)">${escapeHtml(h.title)}</b> — это ${label.toLowerCase()}.
+          Такие версии находятся в разработке и <b style="color:#e8862c">могут работать неисправно</b>: возможны вылеты, баги и несовместимость с другими модами.
+        </div>
+        <div style="display:flex;gap:8px;margin-top:12px">
+          <button class="secondary-btn" id="mUnstNo" style="margin:0;flex:1">ОТМЕНА</button>
+          <button class="play-btn" id="mUnstYes" style="margin:0;flex:1;font-size:14px">ВСЁ РАВНО УСТАНОВИТЬ</button>
+        </div>
+      `, false, () => {
+        const no = $('#mUnstNo');
+        if (no) no.addEventListener('click', () => modal.classList.remove('show'));
+        const yes = $('#mUnstYes');
+        if (yes) yes.addEventListener('click', () => { modal.classList.remove('show'); doInstallChecked(h, version, withDeps); });
+      });
+      return;
+    }
+    doInstallChecked(h, version, withDeps);
+  }
+
+  function doInstallChecked(h, version, withDeps) {
     const deps = (version.dependencies || []).filter(d => d.dependency_type === 'required' && d.project_id);
     if (!withDeps && deps.length) {
       const ids = deps.map(d => d.project_id);
