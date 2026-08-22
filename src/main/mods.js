@@ -1728,6 +1728,26 @@ async function favsRemove(slug) {
   if (out.length !== list.length) await saveFavs(out);
   return out;
 }
+// Установка модпака из каталога Modrinth: качаем .mrpack версии и импортируем
+async function installModpack({ versionId }, onProgress) {
+  const v = await mrVersion(versionId);
+  const files = Array.isArray(v && v.files) ? v.files : [];
+  const f = files.find(x => x.primary) || files[0];
+  if (!f || !f.url) throw new Error('У версии модпака нет файла .mrpack');
+  await fsp.mkdir(path.join(ROOT, 'cache'), { recursive: true });
+  const tmp = path.join(ROOT, 'cache', 'modpack-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6) + '.mrpack');
+  try {
+    let lastPct = -1;
+    await downloadFile(f.url, tmp, (rec, total) => {
+      const pct = total > 0 ? rec / total : 0;
+      if (onProgress && pct - lastPct > 0.05) { lastPct = pct; onProgress(pct * 0.2, 'Скачивание модпака...'); }
+    });
+    return await importMrpack(tmp, onProgress);
+  } finally {
+    await fsp.rm(tmp, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 module.exports = {
   setRoot,
   mrSearch, mrProject, mrProjectVersions, mrVersion, mrCategories, mrLoaders, mrGameVersions,
@@ -1736,6 +1756,7 @@ module.exports = {
   updateBuildMeta,
   loadInstalled,
   exportBuild, importBuild, importMrpack, findModrinthByHash, packConfigs, unpackConfigs,
+  installModpack,
   findJava, findJavaMajor, javaCandidates, javaMajor, ensureJavaRuntime,
   modsDir, packsDir, buildDir, loadBuilds,
   ensureSkinMod,
