@@ -212,6 +212,16 @@ function registerIpc() {
         console.error('[skin-in-game]', e && e.message);
       }
     }
+    // Автодоводка: если у сборки нет version-json (импорт модпака не поставил
+    // лоадер), доустанавливаем его прямо перед запуском — иначе «Version not found»
+    if (typeof opts.buildId === 'string') {
+      try {
+        const build = (await mods.loadBuilds()).find(b => b.id === opts.buildId);
+        if (build) await mods.ensureBuildVersion(build);
+      } catch (e) {
+        console.error('[ensure-version]', e && e.message);
+      }
+    }
     try {
       const pid = await launcher.launchVersion({
         version,
