@@ -1099,7 +1099,7 @@
   let B_OFFSET = 0;
   let B_CAT = null;
   const CAT_CACHE = {}; // кэш результатов поиска Modrinth (по ключу запроса)
-  const B_TYPES = [['mod', 'МОДЫ'], ['resourcepack', 'РЕСУРСПАКИ'], ['shaderpack', 'ШЕЙДЕРЫ'], ['datapack', 'ДАТАПАКИ']];
+  const B_TYPES = [['mod', 'МОДЫ'], ['resourcepack', 'РЕСУРСПАКИ'], ['shaderpack', 'ШЕЙДЕРЫ'], ['modpack', 'МОДПАКИ']];
   let B_TYPE = 'mod';
   let INST_QUERY = '';
   // Кэш названий/иконок модов с Modrinth (по slug) — чтобы не дёргать API на каждом рендере
@@ -1521,11 +1521,16 @@
     if (info) info.textContent = '';
     const q = ($('#bSearch').value || '').trim();
     const facets = [];
-    if (CURRENT_BUILD) {
-      facets.push(['versions:' + CURRENT_BUILD.gameVersion]);
-      if (B_TYPE === 'mod') facets.push(['categories:' + CURRENT_BUILD.loader.toLowerCase()]);
+    if (B_TYPE === 'modpack') {
+      // модпаки: без привязки к текущей сборке (пак сам несёт версию игры и лоадер)
+      facets.push(['project_type:modpack']);
+    } else {
+      if (CURRENT_BUILD) {
+        facets.push(['versions:' + CURRENT_BUILD.gameVersion]);
+        if (B_TYPE === 'mod') facets.push(['categories:' + CURRENT_BUILD.loader.toLowerCase()]);
+      }
+      facets.push(['project_type:' + (B_TYPE === 'shaderpack' ? 'shader' : B_TYPE)]);
     }
-    facets.push(['project_type:' + (B_TYPE === 'shaderpack' ? 'shader' : B_TYPE)]);
     if (B_CAT) facets.push(['categories:' + B_CAT]);
     const cacheKey = q + '|' + JSON.stringify(facets) + '|' + B_OFFSET;
     const render = res => {
@@ -1586,12 +1591,35 @@
         </div>
       </div>
       <div style="font-family:var(--mc-font-body);font-size:11.5px;color:var(--mc-grey-2);line-height:1.55;max-height:110px;overflow-y:auto">${escapeHtml((h.description || '').slice(0, 600))}</div>
-      <div style="font-family:var(--mc-font);font-size:11px;letter-spacing:.08em;color:var(--mc-grey-3);margin:10px 0 6px">ВЕРСИИ ДЛЯ ВАШЕЙ СБОРКИ ${CURRENT_BUILD ? '(' + escapeHtml(CURRENT_BUILD.gameVersion) + ' / ' + escapeHtml(CURRENT_BUILD.loader) + ')' : ''}</div>
+      <div style="font-family:var(--mc-font);font-size:11px;letter-spacing:.08em;color:var(--mc-grey-3);margin:10px 0 6px">${B_TYPE === 'modpack' ? 'ВЕРСИИ МОДПАКА' : 'ВЕРСИИ ДЛЯ ВАШЕЙ СБОРКИ ' + (CURRENT_BUILD ? '(' + escapeHtml(CURRENT_BUILD.gameVersion) + ' / ' + escapeHtml(CURRENT_BUILD.loader) + ')' : '')}</div>
       <div style="display:flex;flex-direction:column;gap:6px;max-height:220px;overflow-y:auto" id="mVers"></div>
     `, false, () => {
       const box = $('#mVers');
       if (!box) return;
       box.innerHTML = '<div class="b-empty">Поиск версий...</div>';
+      if (B_TYPE === 'modpack') {
+        // Модпаки: версии без привязки к сборке; установка = импорт новой сборки
+        api.invoke('modrinth:versions', h.slug).then(vers => {
+          const list = Array.isArray(vers) ? vers : [];
+          box.innerHTML = '';
+          if (!list.length) { box.innerHTML = '<div class="b-empty">Версий нет</div>'; return; }
+          list.slice(0, 15).forEach(v => {
+            const f = (v.files || []).find(x => x.primary) || (v.files || [])[0];
+            const mb = f && f.size ? (f.size / 1048576).toFixed(1) + ' MB' : '';
+            const row = document.createElement('div');
+            row.className = 'b-mod b-ver-row';
+            row.innerHTML = `
+              <div style="display:flex;align-items:center;gap:8px">
+                <div class="bm-name">${escapeHtml(v.version_number)} &middot; ${escapeHtml((v.loaders || []).join('/'))}</div>
+                <div class="bm-size">${mb}</div>
+              </div>
+              <button class="b-mini play">УСТАНОВИТЬ КАК СБОРКУ</button>`;
+            row.querySelector('button').addEventListener('click', () => installModpack(h, v));
+            box.appendChild(row);
+          });
+        }).catch(err => { box.innerHTML = '<div class="b-empty">Ошибка: ' + escapeHtml(err.message || err) + '</div>'; });
+        return;
+      }
       if (!CURRENT_BUILD) {
         box.innerHTML = '<div class="b-empty">Сначала выберите сборку</div>';
         return;
@@ -1627,6 +1655,22 @@
       box.innerHTML = '<div class="b-empty">Ошибка: ' + escapeHtml(err.message || err) + '</div>';
     });
     }); // onShow
+  }
+
+  // Установка модпака из каталога: качаем .mrpack и импортируем как новую сборку
+  function installModpack(h, v) {
+    if (!h || !v) return;
+    setStatus('МОДПАК: ' + h.title.toUpperCase(), 'busy');
+    updateProgress({ name: h.title, frac: 0 });
+    api.invoke('builds:install-modpack', { slug: h.slug, versionId: v.id }).then(newId => {
+      hideProgress();
+      setStatus('МОДПАК УСТАНОВЛЕН: ' + h.title, '');
+      modal.classList.remove('show');
+      refreshBuilds().then(() => selectBuild(newId));
+    }).catch(err => {
+      hideProgress();
+      setStatus('ОШИБКА: ' + (err.message || err), 'busy');
+    });
   }
 
   /* ===== Избранное ===== */
@@ -1859,6 +1903,68 @@
   // Рендер списка версий с золотой подсветкой нужной версии и надписью «нужен для ...»
   function renderModVersions(box, h, hl) {
     box.innerHTML = '<div class="b-empty">\u0417\u0430\u0433\u0440\u0443\u0437\u043a\u0430...</div>';
+    // МОДПАКИ: версии без привязки к сборке; пользователь выбирает версию Minecraft и загрузчик
+    if ((h && (h.project_type === 'modpack' || h.btype === 'modpack')) || B_TYPE === 'modpack') {
+      api.invoke('modrinth:versions', h.slug).then(vers => {
+        const list = Array.isArray(vers) ? vers : [];
+        box.innerHTML = '';
+        if (!list.length) { box.innerHTML = '<div class="b-empty">Версий нет</div>'; return; }
+        // доступные версии Minecraft и загрузчики (из всех версий пакета)
+        const mcSeen = new Set(); const ldSeen = new Set();
+        list.forEach(v => {
+          if (v.version_type !== 'release') return; // приоритет релизным строкам
+          (v.game_versions || []).forEach(g => mcSeen.add(g));
+          (v.loaders || []).forEach(l => ldSeen.add(l));
+        });
+        if (!mcSeen.size) list.forEach(v => { (v.game_versions || []).forEach(g => mcSeen.add(g)); (v.loaders || []).forEach(l => ldSeen.add(l)); });
+        const mcs = Array.from(mcSeen);
+        const lds = Array.from(ldSeen);
+        const latest = list.find(v => v.version_type === 'release') || list[0];
+        let selMc = (latest.game_versions || [])[0] || mcs[0];
+        let selLd = (latest.loaders || [])[0] || lds[0];
+        const selStyle = 'background:var(--mc-grey-5);border:2px solid var(--mc-off-black);color:var(--mc-off-white);padding:6px 9px;font-family:var(--mc-font);font-size:11.5px;outline:none';
+        const controls = document.createElement('div');
+        controls.style.cssText = 'display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;align-items:center';
+        controls.innerHTML = `
+          <span style="font-family:var(--mc-font);font-size:10.5px;color:var(--mc-grey-3);letter-spacing:.06em">ВЕРСИЯ MINECRAFT:</span>
+          <select id="mpMc" style="${selStyle}">${mcs.map(m => `<option value="${escapeHtml(m)}"${m === selMc ? ' selected' : ''}>${escapeHtml(m)}</option>`).join('')}</select>
+          <span style="font-family:var(--mc-font);font-size:10.5px;color:var(--mc-grey-3);letter-spacing:.06em;margin-left:6px">ЗАГРУЗЧИК:</span>
+          <select id="mpLd" style="${selStyle}">${lds.map(l => `<option value="${escapeHtml(l)}"${l === selLd ? ' selected' : ''}>${escapeHtml(l)}</option>`).join('')}</select>`;
+        box.appendChild(controls);
+        const listEl = document.createElement('div');
+        listEl.style.cssText = 'display:flex;flex-direction:column;gap:6px';
+        box.appendChild(listEl);
+        const renderMpList = () => {
+          const mc = $('#mpMc').value;
+          const ld = $('#mpLd').value;
+          const filtered = list.filter(v => (v.game_versions || []).includes(mc) && (!ld || (v.loaders || []).includes(ld)));
+          listEl.innerHTML = '';
+          if (!filtered.length) {
+            listEl.innerHTML = '<div class="b-empty">Нет версий для Minecraft ' + escapeHtml(mc) + ' / ' + escapeHtml(ld) + '</div>';
+            return;
+          }
+          filtered.slice(0, 15).forEach(v => {
+            const gv = (v.game_versions || []).find(x => x === mc) || mc;
+            const f = (v.files || []).find(x => x.primary) || (v.files || [])[0];
+            const mb = f && f.size ? (f.size / 1048576).toFixed(1) + ' MB' : '';
+            const row = document.createElement('div');
+            row.className = 'b-mod b-ver-row';
+            row.innerHTML = `
+              <div style="display:flex;align-items:center;gap:8px">
+                <div class="bm-name">MINECRAFT ${escapeHtml(gv)} &middot; ${escapeHtml((v.loaders || []).join('/'))} &middot; пакет ${escapeHtml(v.version_number)}</div>
+                <div class="bm-size">${mb}</div>
+              </div>
+              <button class="b-mini play">УСТАНОВИТЬ КАК СБОРКУ</button>`;
+            row.querySelector('button').addEventListener('click', () => installModpack(h, v));
+            listEl.appendChild(row);
+          });
+        };
+        controls.querySelector('#mpMc').addEventListener('change', renderMpList);
+        controls.querySelector('#mpLd').addEventListener('change', renderMpList);
+        renderMpList();
+      }).catch(err => { box.innerHTML = '<div class="b-empty">Ошибка: ' + escapeHtml(err.message || err) + '</div>'; });
+      return;
+    }
     if (!CURRENT_BUILD) {
       box.innerHTML = '<div class="b-empty">\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0441\u0431\u043e\u0440\u043a\u0443</div>';
       return;
