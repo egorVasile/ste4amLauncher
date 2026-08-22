@@ -406,17 +406,18 @@ async function installForgeLike(build, gameVersion, loader, onProgress) {
   const isNeo = loader === 'neoforge';
   let installerUrl = null;
   let installerName = null;
+  let ver = null;
   if (isNeo) {
     const xml = await cachedText('https://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml', 'maven-neoforge.xml', CACHE_TTL.mavenXml);
     const all = [...xml.matchAll(/<version>([^<]+)<\/version>/g)].map(m => m[1]);
-    const ver = pickLoaderVersion(all, gameVersion, true);
+    ver = pickLoaderVersion(all, gameVersion, true);
     if (!ver) throw new Error('NeoForge не поддерживает ' + gameVersion);
     installerUrl = `https://maven.neoforged.net/releases/net/neoforged/neoforge/${ver}/neoforge-${ver}-installer.jar`;
     installerName = `neoforge-${ver}-installer.jar`;
   } else {
     const xml = await cachedText('https://maven.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml', 'maven-forge.xml', CACHE_TTL.mavenXml);
     const all = [...xml.matchAll(/<version>([^<]+)<\/version>/g)].map(m => m[1]);
-    const ver = pickLoaderVersion(all, gameVersion, false);
+    ver = pickLoaderVersion(all, gameVersion, false);
     if (!ver) throw new Error('Forge не поддерживает ' + gameVersion);
     installerUrl = `https://maven.minecraftforge.net/net/minecraftforge/forge/${ver}/forge-${ver}-installer.jar`;
     installerName = `forge-${ver}-installer.jar`;
@@ -457,7 +458,7 @@ async function installForgeLike(build, gameVersion, loader, onProgress) {
       p.on('close', (code) => {
         clearInterval(tick);
         if (code === 0) resolve();
-        else reject(new Error('Установка ' + loader + ' не удалась (код ' + code + '): ' + out.slice(-300)));
+          else reject(new Error('Установка ' + loader + ' не удалась (код ' + code + '): ' + out.slice(-2500)));
       });
     });
   } else {
@@ -535,7 +536,12 @@ async function buildForgeProfile(build, gameVersion, isNeo) {
   try {
     const vdir = path.join(gameDir, 'versions');
     if (fs.existsSync(vdir)) {
-      for (const n of fs.readdirSync(vdir)) {
+      // Установщик кладёт сюда и ванильную (<gameVersion>), и лоадерную
+      // (neoforge-x.y.z / forge-x.y.z) версии — выбираем именно лоадерную
+      const names = fs.readdirSync(vdir)
+        .filter(n => n !== gameVersion)
+        .sort((a, b) => Number(b.startsWith('net.') || /neoforge|forge/.test(b)) - Number(a.startsWith('net.') || /neoforge|forge/.test(a)));
+      for (const n of names) {
         const p = path.join(vdir, n, n + '.json');
         if (fs.existsSync(p)) {
           const vj = JSON.parse(await fsp.readFile(p, 'utf8'));
@@ -1454,11 +1460,23 @@ async function importMrpack(filePath, onProgress) {
     if (loader) {
       if (onProgress) onProgress(0, 'Установка ' + loader + ' ' + gameVersion + '...');
       const preferKey = loader === 'fabric' ? 'fabric-loader' : (loader === 'quilt' ? 'quilt-loader' : null);
-      try {
-        await installLoader(b, gameVersion, loader, (fr, stage) => onProgress && onProgress(Math.min(fr * 0.15, 0.15), stage || ('Установка ' + loader + '...')), preferKey ? deps[preferKey] : null);
-      } catch (e) {
-        log('mrpack loader install failed:', e && e.message);
-        if (onProgress) onProgress(0.15, 'Лоадер не установлен (' + ((e && e.message) || 'ошибка') + ') — продолжаем');
+      let loaderErr = null;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          await installLoader(b, gameVersion, loader, (fr, stage) => onProgress && onProgress(Math.min(fr * 0.15, 0.15), stage || ('Установка ' + loader + '...')), preferKey ? deps[preferKey] : null);
+          loaderErr = null;
+          break;
+        } catch (e) {
+          loaderErr = e;
+          if (attempt < 2) {
+            if (onProgress) onProgress(0.05, 'Ошибка установки лоадера, повтор ' + (attempt + 2) + '/3...');
+            await new Promise(r => setTimeout(r, 3000));
+          }
+        }
+      }
+      if (loaderErr) {
+        log('mrpack loader install failed:', loaderErr && loaderErr.message);
+        if (onProgress) onProgress(0.15, 'Лоадер доустановится при первом запуске');
       }
     }
 
@@ -1748,12 +1766,22 @@ async function installModpack({ versionId }, onProgress) {
   }
 }
 
+// Гарантирует наличие version-json сборки: если импорт не успел поставить
+// лоадер (сеть/ошибка), доустанавливаем его прямо перед запуском игры
+async function ensureBuildVersion(build) {
+  const vfile = path.join(ROOT, 'versions', build.id, build.id + '.json');
+  if (fs.existsSync(vfile)) return true;
+  if (!build.loader || !build.gameVersion) throw new Error('У сборки не указан загрузчик');
+  await installLoader(build, build.gameVersion, build.loader, null);
+  return true;
+}
+
 module.exports = {
   setRoot,
   mrSearch, mrProject, mrProjectVersions, mrVersion, mrCategories, mrLoaders, mrGameVersions,
   mrBatchProjects, mrBatchVersions,
   buildsList, buildCreate, deleteBuild, installedMods, installProject, deleteMod,
-  updateBuildMeta,
+  updateBuildMeta, ensureBuildVersion,
   loadInstalled,
   exportBuild, importBuild, importMrpack, findModrinthByHash, packConfigs, unpackConfigs,
   installModpack,
