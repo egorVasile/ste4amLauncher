@@ -22,6 +22,7 @@ const INVOKE = [
   'builds:create',
   'builds:delete',
   'builds:update-meta',
+  'builds:install-modpack',
   'builds:installed',
   'builds:registry',
   'builds:install-mod',
