@@ -289,6 +289,16 @@ function registerIpc() {
     emit('builds:changed', {});
     return out;
   });
+  ipcMain.handle('builds:install-modpack', async (e, opts) => {
+    try {
+      const id = await mods.installModpack(opts || {}, (fr, stage) => e.sender.send('builds:progress', { frac: fr, name: stage || 'Модпак' }));
+      emit('builds:changed', {});
+      return id;
+    } catch (err) {
+      console.error('[builds:install-modpack]', err && err.message);
+      throw err;
+    }
+  });
   ipcMain.handle('builds:installed', (_e, id, type) => mods.installedMods(id, type));
   ipcMain.handle('builds:registry', (_e, id) => mods.loadInstalled(id));
 ipcMain.handle('news:fetch', () => mods.fetchNews());
