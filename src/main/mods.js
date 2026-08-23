@@ -1911,12 +1911,180 @@ async function setIconFromName(buildId, name) {
   try { return await setIconFromUrl(buildId, hit.icon_url); } catch (e) { log('icon-by-name: ошибка иконки:', e && e.message); return b; }
 }
 
+/* ============ Перенос и объединение сборок ============ */
+
+// Ищет версию мода на Modrinth под целевую версию игры + загрузчик
+async function findVersionForMod(slug, gameVersion, loader) {
+  try {
+    const gv = encodeURIComponent(JSON.stringify([gameVersion]));
+    let u = `https://api.modrinth.com/v2/project/${encodeURIComponent(slug)}/version?game_versions=${gv}`;
+    if (loader && loader !== 'vanilla') u += `&loaders=${encodeURIComponent(JSON.stringify([loader.toLowerCase()]))}`;
+    const list = JSON.parse((await httpGet(u)).toString('utf8'));
+    if (!Array.isArray(list) || !list.length) return null;
+    const rel = list.find(v => (v.version_type || '') === 'release') || list[0];
+    const f = (rel.files || []).find(x => x.primary) || (rel.files || [])[0];
+    if (!f) return null;
+    return { versionId: rel.id, versionName: rel.name || rel.version_number, file: f };
+  } catch (e) { return null; }
+}
+
+// ПЕРЕНОС сборки на другую версию игры: новая сборка, старая остаётся
+async function migrateBuild({ buildId, targetVersion, withData }, onProgress) {
+  const builds = await loadBuilds();
+  const src = builds.find(x => x.id === buildId);
+  if (!src) throw new Error('Сборка не найдена');
+  const loader = src.loader || 'vanilla';
+  const report = (a, o, stage) => onProgress && onProgress({ analysis: a, overall: o, stage: stage || '' });
+
+  report(0, 0, 'Создание сборки...');
+  const id = 'build-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6);
+  const b = { id, name: src.name, gameVersion: targetVersion, loader: src.loader, icon: src.icon, created: Date.now() };
+  const bdir = buildDir(id);
+  for (const sub of ['game/mods', 'game/resourcepacks', 'game/shaderpacks', 'game/datapacks']) {
+    await fsp.mkdir(path.join(bdir, sub), { recursive: true });
+  }
+
+  // 1. Анализ модов: есть ли версия под целевую версию игры
+  const inst = await loadInstalled(buildId);
+  const files = (inst.files || []).filter(f => (f.type || 'mod') === 'mod');
+  const found = [], missing = [];
+  let i = 0;
+  for (const f of files) {
+    i++;
+    const label = f.slug || f.filename;
+    report(i / Math.max(1, files.length), (i / Math.max(1, files.length)) * 0.3, 'Анализ: ' + label);
+    const hit = f.slug ? await findVersionForMod(f.slug, targetVersion, loader) : null;
+    if (hit) found.push({ src: f, hit });
+    else missing.push(label);
+  }
+
+  // 2. Данные: миры, конфиги, ресурспаки (по галочке)
+  if (withData) {
+    report(1, 0.32, 'Перенос миров и настроек...');
+    const srcGame = path.join(buildDir(buildId), 'game');
+    const dstGame = path.join(bdir, 'game');
+    for (const sub of ['config', 'saves', 'resourcepacks', 'shaderpacks']) {
+      const s = path.join(srcGame, sub);
+      if (fs.existsSync(s)) { try { await copyDirContents(s, path.join(dstGame, sub)); } catch (e) {} }
+    }
+    for (const f of ['options.txt', 'servers.dat', 'hotbar.nbt']) {
+      const s = path.join(srcGame, f);
+      if (fs.existsSync(s)) { try { await fsp.copyFile(s, path.join(dstGame, f)); } catch (e) {} }
+    }
+  }
+
+  // 3. Загрузчик (с ретраями)
+  report(1, 0.38, 'Установка ' + loader + '...');
+  let loaderErr = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try { await installLoader(b, targetVersion, loader, null); loaderErr = null; break; }
+    catch (e) { loaderErr = e; if (attempt < 2) await new Promise(r => setTimeout(r, 3000)); }
+  }
+  if (loaderErr) throw new Error('Загрузчик не установился: ' + (loaderErr && loaderErr.message));
+
+  // 4. Скачивание модов
+  builds.unshift(b); await saveBuilds(builds);
+  let done = 0;
+  for (const item of found) {
+    done++;
+    report(1, 0.4 + (done / Math.max(1, found.length)) * 0.6, 'Моды: ' + (item.hit.versionName || item.src.slug));
+    const dest = path.join(modsDir(id), item.hit.file.filename);
+    if (!fs.existsSync(dest)) await downloadFile(item.hit.file.url, dest);
+    await recordInstalled(id, 'mod', [{ projectId: item.src.slug, filename: item.hit.file.filename }]);
+  }
+
+  emitChanged();
+  return { ok: true, buildId: id, total: files.length, moved: found.length, missing };
+}
+
+// ОБЪЕДИНЕНИЕ сборок: новая сборка из модов двух и более
+async function mergeBuilds({ buildIds, targetVersion, withConfigs, name, icon }, onProgress) {
+  const builds = await loadBuilds();
+  const srcs = (buildIds || []).map(id2 => builds.find(x => x.id === id2)).filter(Boolean);
+  if (srcs.length < 2) throw new Error('Выберите минимум две сборки');
+  const loader = srcs[0].loader || 'vanilla';
+  const report = (a, o, stage) => onProgress && onProgress({ analysis: a, overall: o, stage: stage || '' });
+
+  report(0, 0, 'Создание сборки...');
+  const id = 'build-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6);
+  const b = { id, name: String(name || 'Объединение').trim().slice(0, 48) || 'Объединение', gameVersion: targetVersion, loader: srcs[0].loader, icon: icon || srcs[0].icon, created: Date.now() };
+  const bdir = buildDir(id);
+  for (const sub of ['game/mods', 'game/resourcepacks', 'game/shaderpacks', 'game/datapacks']) {
+    await fsp.mkdir(path.join(bdir, sub), { recursive: true });
+  }
+
+  // 1. Собираем список всех модов из всех сборок
+  const all = [];
+  let total = 0;
+  for (const s of srcs) {
+    const inst = await loadInstalled(s.id);
+    const fs2 = (inst.files || []).filter(f => (f.type || 'mod') === 'mod');
+    fs2.forEach(f => all.push({ slug: f.slug, filename: f.filename, build: s.name }));
+    total += fs2.length;
+  }
+
+  // 2. Анализ: уникальные + дубликаты + отсутствующие
+  const uniq = new Map();
+  const duplicates = [];
+  const missing = [];
+  let i = 0;
+  for (const m of all) {
+    i++;
+    report(i / Math.max(1, total), (i / Math.max(1, total)) * 0.25, 'Анализ: ' + (m.slug || m.filename));
+    if (m.slug && uniq.has(m.slug)) { duplicates.push(m.slug); continue; }
+    if (!m.slug) { missing.push(m.filename); continue; }
+    const hit = await findVersionForMod(m.slug, targetVersion, loader);
+    if (hit) uniq.set(m.slug, { slug: m.slug, hit });
+    else missing.push(m.slug);
+  }
+
+  // 3. Загрузчик
+  report(1, 0.28, 'Установка ' + loader + '...');
+  let loaderErr = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try { await installLoader(b, targetVersion, loader, null); loaderErr = null; break; }
+    catch (e) { loaderErr = e; if (attempt < 2) await new Promise(r => setTimeout(r, 3000)); }
+  }
+  if (loaderErr) throw new Error('Загрузчик не установился: ' + (loaderErr && loaderErr.message));
+
+  // 4. Скачивание уникальных модов
+  builds.unshift(b); await saveBuilds(builds);
+  const arr = [...uniq.values()];
+  let done = 0;
+  for (const item of arr) {
+    done++;
+    report(1, 0.3 + (done / Math.max(1, arr.length)) * 0.7, 'Моды: ' + item.slug);
+    const dest = path.join(modsDir(id), item.hit.file.filename);
+    if (!fs.existsSync(dest)) await downloadFile(item.hit.file.url, dest);
+    await recordInstalled(id, 'mod', [{ projectId: item.slug, filename: item.hit.file.filename }]);
+  }
+
+  // 5. Конфиги и ресурспаки из ПЕРВОЙ сборки (по галочке)
+  if (withConfigs) {
+    report(1, 1, 'Перенос конфигов...');
+    const srcGame = path.join(buildDir(srcs[0].id), 'game');
+    const dstGame = path.join(bdir, 'game');
+    for (const sub of ['config', 'resourcepacks', 'shaderpacks']) {
+      const s = path.join(srcGame, sub);
+      if (fs.existsSync(s)) { try { await copyDirContents(s, path.join(dstGame, sub)); } catch (e) {} }
+    }
+  }
+
+  emitChanged();
+  return { ok: true, buildId: id, duplicates: [...new Set(duplicates)], missing, total };
+}
+
+function emitChanged() {
+  try { const { ipcMain } = require('electron'); if (global.__emitBuildsChanged) global.__emitBuildsChanged(); } catch (e) {}
+}
+
 module.exports = {
   setRoot,
   mrSearch, mrProject, mrProjectVersions, mrVersion, mrCategories, mrLoaders, mrGameVersions,
   mrBatchProjects, mrBatchVersions,
   buildsList, buildCreate, deleteBuild, installedMods, installProject, deleteMod,
   updateBuildMeta, ensureBuildVersion, setIconFromUrl, setIconFromName,
+  migrateBuild, mergeBuilds,
   loadInstalled,
   exportBuild, importBuild, importMrpack, findModrinthByHash, packConfigs, unpackConfigs,
   installModpack,
