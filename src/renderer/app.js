@@ -19,6 +19,7 @@
   let APP_VERSION = '';
   const WHATSNEW_URL = 'https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/whatsnew.json';
   const NEWS_NOTES = {
+    '3.0.11': "3.0.11 — умная диагностика с автопочинкой.\n\nДиагностика теперь распознаёт конфликты модов Fabric (Incompatible mods found) и показывает, какой мод не хватает, какой кого ломает.\n\nНОВАЯ КНОПКА «СДЕЛАТЬ ВСЁ АВТОМАТИЧЕСКИ»:\n— установит недостающие моды-зависимости;\n— скачает нужную Java и пропишет путь;\n— очистит кэш повреждённых библиотек;\n— при конфликте модов спросит, какой удалить (ничего не удаляется без вашего согласия).",
     '3.0.10': "3.0.10 — аккуратная раскладка кнопок.\n\n— «⇄ Перенести» переехала в карточку сборки, под кнопку «✎ Изменить»\n— Ряд кнопок (Играть/Экспорт/Импорт/Удалить) больше не переполняется\n— Кнопка «Объединить» аккуратно встала в шапке списка сборок",
     '3.0.9': "3.0.9 — перенос и объединение сборок.\n\n1) ПЕРЕНОС СБОРКИ\nКнопка «⇄ Перенести» в сборке: выбери новую версию Minecraft — лаунчер проверит каждый мод, найдёт его версию под новую игру и создаст новую сборку (старая останется). Миры и настройки переносятся по галочке. Моды, которых нет под новую версию, будут перечислены в конце.\n\n2) ОБЪЕДИНЕНИЕ СБОРКИ\nКнопка «🔗 Объединить»: выбери две или более сборок — из их модов соберётся новая. Повторяющиеся моды покажем списком — реши, что оставить. Конфиги и ресурспаки — по галочке.\n\n3) Читаемые названия модов во всех списках вместо ID.",
     '3.0.8': "3.0.8 — улучшенная диагностика.\n\nУмная диагностика крашей теперь распознаёт больше типов ошибок:\n— повреждённые нативные библиотеки (lwjgl.dll и др.) с подсказкой решения;\n— краши модов при старте (Sodium и др.).\n\nЛожные срабатывания при успешном запуске по-прежнему исключены.",
@@ -958,7 +959,9 @@
     loader_crash:    { label: 'СБОЙ ЗАГРУЗЧИКА МОДОВ', color: '#d8a03a' },
     native:          { label: 'ОШИБКА СИСТЕМНЫХ БИБЛИОТЕК', color: '#d8a03a' },
     gpu:             { label: 'ПРОБЛЕМА С ВИДЕОКАРТОЙ', color: '#d8a03a' },
-    corrupt:         { label: 'ПОВРЕЖДЁННЫЙ ФАЙЛ', color: '#d8a03a' }
+    corrupt:         { label: 'ПОВРЕЖДЁННЫЙ ФАЙЛ', color: '#d8a03a' },
+    natives:         { label: 'ПОВРЕЖДЁННЫЕ БИБЛИОТЕКИ', color: '#d8a03a' },
+    mod_conflict:    { label: 'КОНФЛИКТ МОДОВ', color: '#ca3636' }
   };
   const DIAG_BTN = {
     install: { text: '\u2795 \u0421\u041a\u0410\u0427\u0410\u0422\u042c', cls: 'play' },
@@ -1048,10 +1051,13 @@
     if (report.problems.some(p => p.kind === 'oom')) {
       html += `<button class="secondary-btn" id="diagRam" style="margin-top:8px;width:100%">\u041e\u0422\u041a\u0420\u042b\u0422\u042c \u041d\u0410\u0421\u0422\u0420\u041e\u0419\u041a\u0418 RAM</button>`;
     }
+    html += `<button class="play-btn" id="diagAutoFix" style="margin-top:8px;width:100%;font-size:14px">&#9881; СДЕЛАТЬ ВСЁ АВТОМАТИЧЕСКИ</button>`;
     html += `<button class="secondary-btn" id="diagClose" style="margin-top:8px;width:100%">\u0417\u0410\u041a\u0420\u042b\u0422\u042c</button>`;
     openModal('\u041f\u0420\u041e\u0411\u041b\u0415\u041c\u0410 \u041f\u0420\u0418 \u0417\u0410\u041f\u0423\u0421\u041a\u0415', html, true, () => {
     const mb = modal.querySelector('.modal');
     if (mb) mb.classList.add('wide');
+    const afBtn = $('#diagAutoFix');
+    if (afBtn) afBtn.addEventListener('click', () => runDiagAutofix(report));
     // клик по карточке → страница мода (с подсветкой нужной версии при несовпадении)
     $$('.b-hit[data-slug]').forEach(card => {
       const slug = card.dataset.slug;
@@ -1097,6 +1103,71 @@
   const buildsNav = $('#buildsNav');
   const buildsNavIcon = $('#buildsNavIcon');
   if (buildsNavIcon) buildsNavIcon.src = ic('Grass.png');
+
+  // Автопочинка по отчёту диагностики: зависимости, Java, кэш нативов.
+  // Удаление модов — ТОЛЬКО с явного согласия пользователя
+  function runDiagAutofix(report) {
+    openModal('АВТОПОЧИНКА', `
+      <div class="mig-prog">
+        <div class="lp-bar"><div class="fill" id="afFill" style="width:0%"></div></div>
+        <div id="afStage" style="font-family:var(--mc-font-body);font-size:10.5px;color:var(--mc-grey-3);margin-top:8px">Выполняю...</div>
+      </div>
+    `, true);
+    const off = api.on('diag:autofix-progress', p => {
+      const f = $('#afFill'), s = $('#afStage');
+      if (f) f.style.width = Math.round((p.frac || 0) * 100) + '%';
+      if (s && p.stage) s.textContent = p.stage;
+    });
+    api.invoke('diag:autofix', { buildId: report.buildId, problems: report.problems })
+      .then(res => {
+        off();
+        const acts = res.actions || [];
+        const nc = res.needConsent || [];
+        const consentHtml = nc.length ? `
+          <div style="margin-top:10px;color:#f0b90b;font-weight:600;font-family:var(--mc-font-body);font-size:11.5px">Обнаружены конфликты модов. Отметьте, какие УДАЛИТЬ (ничего не удаляется без вашего согласия):</div>
+          <div style="max-height:150px;overflow:auto;background:var(--mc-grey-5);border-radius:4px;padding:8px;margin-top:6px;display:flex;flex-direction:column;gap:4px">
+            ${nc.map(c2 => `<label style="display:flex;gap:8px;align-items:center;font-family:var(--mc-font-body);font-size:11px;color:var(--mc-off-white)"><input type="checkbox" class="afDel" data-slug="${escapeHtml(c2.slug)}" style="accent-color:#ca3636"/> ${escapeHtml(c2.slug)} <span style="color:var(--mc-grey-3)">(ломает ${escapeHtml(c2.breaks)})</span></label>`).join('')}
+          </div>` : '';
+        openModal('АВТОПОЧИНКА ЗАВЕРШЕНА', `
+          <div style="font-family:var(--mc-font-body);font-size:11.5px;line-height:1.6;color:var(--mc-grey-2)">
+            ${acts.length ? acts.map(a => '✓ ' + escapeHtml(a)).join('<br/>') : 'Действий не потребовалось.'}
+            ${consentHtml}
+          </div>
+          <div style="display:flex;gap:8px;margin-top:12px">
+            ${nc.length ? '<button class="secondary-btn" id="afDelBtn" style="margin:0;flex:1;color:#ca3636">УДАЛИТЬ ОТМЕЧЕННЫЕ</button>' : ''}
+            <button class="play-btn" id="afDone" style="margin:0;flex:1;font-size:14px">ГОТОВО</button>
+          </div>
+        `, false, () => {
+          const d = $('#afDone');
+          if (d) d.addEventListener('click', () => modal.classList.remove('show'));
+          const del = $('#afDelBtn');
+          if (del) del.addEventListener('click', () => {
+            const rm = Array.from(document.querySelectorAll('.afDel:checked')).map(c => c.dataset.slug);
+            modal.classList.remove('show');
+            if (rm.length && report.buildId) {
+              (async () => {
+                let inst = null;
+                try { inst = await api.invoke('builds:installed', report.buildId); } catch (e) {}
+                const files = (inst && inst.files) || inst || [];
+                for (const s of rm) {
+                  const entry = files.find(x => x.slug === s);
+                  if (entry && entry.filename) {
+                    try { await api.invoke('builds:delete-mod', report.buildId, entry.filename, 'mod'); } catch (e) {}
+                  }
+                }
+                mcToast('УДАЛЕНО: ' + rm.length);
+                refreshBuilds();
+              })();
+            }
+          });
+        });
+      })
+      .catch(err => {
+        off();
+        modal.classList.remove('show');
+        mcToast('ОШИБКА АВТОПОЧИНКИ: ' + (err.message || err));
+      });
+  }
 
   function showBuildsTab(on) {
     if (buildsNav) buildsNav.style.display = on ? '' : 'none';
