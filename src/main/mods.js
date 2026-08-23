@@ -370,16 +370,25 @@ async function writeVersionJson(build, gameVersion, profile) {
   profile.minecraftVersion = gameVersion;
   // Дедупликация библиотек по artifactId: ванильные (base) приоритетнее —
   // они новее (gson 2.10.1 vs 2.8.9 и т.п.). Иначе грузится старая версия
-  // и моды падают с NoSuchMethodError
+  // и моды падают с NoSuchMethodError.
+  // ВАЖНО: записи с natives/classifiers (нативные jar-ы) НЕ дедуплицируем —
+  // у них тот же artifactId, что у основного jar, но это отдельные файлы!
   const artId = (lib) => {
     const n = String((lib && lib.name) || '');
     if (n.indexOf(':') > -1) { const p = n.split(':'); return p[1] || n; }
     const seg = n.split(/[\\/]/);
     return seg.length >= 3 ? seg[seg.length - 3] : n;
   };
+  const isNativeEntry = (l) => !!(l && (l.natives || (l.downloads && l.downloads.classifiers) || /:natives-/.test(String((l && l.name) || ''))));
   const seen = new Set();
-  const baseLibs = (base.libraries || []).filter(l => { const a = artId(l); if (seen.has(a)) return false; seen.add(a); return true; });
-  const extraLibs = (profile.libraries || []).filter(l => !seen.has(artId(l)));
+  const baseLibs = (base.libraries || []).filter(l => {
+    if (isNativeEntry(l)) return true;
+    const a = artId(l); if (seen.has(a)) return false; seen.add(a); return true;
+  });
+  const extraLibs = (profile.libraries || []).filter(l => {
+    if (isNativeEntry(l)) return true;
+    return !seen.has(artId(l));
+  });
   profile.libraries = [...baseLibs, ...extraLibs];
   if (!profile.arguments) profile.arguments = {};
   if (!Array.isArray(profile.arguments.game) || profile.arguments.game.length === 0) {
