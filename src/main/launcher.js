@@ -927,7 +927,8 @@ let currentProcess = null;
 
 async function launchVersion(opts, onEvent) {
   if (currentProcess) throw new Error('Игра уже запущена');
-  const { dlog } = require('./debuglog');
+  let dlog = () => {};
+  try { dlog = require('./debuglog').dlog; } catch (e) {}
   const emit = (type, data) => {
     if (type === 'log' && data && data.line) dlog('[лог]', String(data.line));
     else if (type === 'stage') dlog('[этап]', (data && data.stage) || '', data && Math.round((data.pct || 0) * 100) + '%');
