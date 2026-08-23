@@ -482,9 +482,23 @@ function deepJavaVersion(text) {
 
 function parse(text) {
   if (!text || !String(text).trim()) return Promise.resolve([]);
-  const src = String(text);
-  const relations = extractRelations(src);
-  const ranges = extractRanges(src);
+  const srcAll = String(text);
+  const relations = extractRelations(srcAll);
+  const ranges = extractRanges(srcAll);
+
+  // ЛОЖНЫЕ СРАБАТЫВАНИЯ: моды часто печатают перехваченные исключения
+  // (ClassNotFoundException и т.п.) в ПРОЦЕССЕ нормальной работы. Крашем
+  // считается только необработанная ошибка — берём текст от ПОСЛЕДНЕГО
+  // фатального маркера до конца. Нет маркера — нет краша, не диагностируем
+  const lastFatal = Math.max(
+    srcAll.lastIndexOf('Exception in thread'),
+    srcAll.lastIndexOf('Description:'),
+    srcAll.lastIndexOf('Uncaught exception'),
+    srcAll.lastIndexOf('Failed to start the game'),
+    srcAll.lastIndexOf('Failed to start the minecraft session')
+  );
+  const src = lastFatal > -1 ? srcAll.slice(lastFatal) : '';
+  if (!src.trim()) return Promise.resolve([]);
 
   const candidates = [];
   const cand = (kind, title, detail, ids, actionForMod, extra) => {
