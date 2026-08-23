@@ -11,7 +11,11 @@ const store = require('./store');
 const launcher = require('./launcher');
 const mods = require('./mods');
 const updater = require('./update');
-const { dlog, logfile } = require('./debuglog');
+// Защита от неполного обновления: если debuglog.js не скачался,
+// лаунчер всё равно запустится (без файлового лога) и сможет самообновиться
+let dlog = () => {};
+let logfile = () => '';
+try { ({ dlog, logfile } = require('./debuglog')); } catch (e) {}
 
 process.on('uncaughtException', (e) => { dlog('[НЕПЕРЕХВАЧЕННАЯ ОШИБКА]', e && e.stack || String(e)); });
 process.on('unhandledRejection', (e) => { dlog('[НЕОБРАБОТАННЫЙ PROMISE]', (e && e.stack) || String(e)); });
