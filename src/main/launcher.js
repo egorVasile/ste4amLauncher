@@ -392,8 +392,17 @@ async function ensureLibraries(vj, onProgress) {
       try {
         const st = fs.statSync(jarPath);
         const wantSize = artifact && artifact.size;
-        if (wantSize) ok = st.size === wantSize;
-        else ok = st.size > 0;
+        let sizeOk = wantSize ? st.size === wantSize : st.size > 0;
+        // sha1-проверка: битые/кривые файлы с зеркал перекачиваем
+        let shaOk = true;
+        if (sizeOk && artifact && artifact.sha1) {
+          try {
+            const h = crypto.createHash('sha1');
+            h.update(fs.readFileSync(jarPath));
+            shaOk = h.digest('hex') === artifact.sha1;
+          } catch (e) { shaOk = false; }
+        }
+        ok = sizeOk && shaOk;
       } catch (e) {}
     }
     if (ok) continue;
@@ -476,20 +485,44 @@ function execOut(cmd, args, opts) {
 }
 
 async function extractJar(jar, dest) {
-  const java = findJava();
-  const candidates = [];
-  if (java) candidates.push({ cmd: path.join(path.dirname(java), 'jar.exe'), args: ['xf', jar] });
-  candidates.push({ cmd: 'tar', args: ['-xf', jar, '-C', dest] });
-  candidates.push({
-    cmd: 'powershell.exe',
-    args: ['-NoProfile', '-Command', 'Expand-Archive -LiteralPath ' + JSON.stringify(jar) + ' -DestinationPath ' + JSON.stringify(dest) + ' -Force']
-  });
-  for (const c of candidates) {
-    try {
-      if (await execOut(c.cmd, c.args, { cwd: dest })) return true;
-    } catch (e) {}
+  // Распаковываем во ВРЕМЕННУЮ подпапку (некоторые зеркала кладут DLL
+  // в подпапки вида windows/x64/org/lwjgl/), затем складываем ВСЕ *.dll
+  // ПЛОСКО в dest — так LWJGL гарантированно находит библиотеки
+  const tmp = path.join(dest, '_tmp_' + Date.now());
+  await fsp.mkdir(tmp, { recursive: true });
+  try {
+    const candidates = [
+      { cmd: 'tar', args: ['-xf', jar, '-C', tmp] },
+      { cmd: 'powershell.exe', args: ['-NoProfile', '-Command', 'Expand-Archive -LiteralPath ' + JSON.stringify(jar) + ' -DestinationPath ' + JSON.stringify(tmp) + ' -Force'] }
+    ];
+    const java = findJava();
+    if (java && fs.existsSync(path.join(path.dirname(java), 'jar.exe'))) {
+      candidates.push({ cmd: path.join(path.dirname(java), 'jar.exe'), args: ['xf', jar], cwd: tmp });
+    }
+    let ok = false;
+    for (const c of candidates) {
+      try { if (await execOut(c.cmd, c.args, { cwd: c.cwd || tmp })) { ok = true; break; } } catch (e) {}
+    }
+    if (!ok) return false;
+    // Flatten: все *.dll из любых подпапок -> корень dest
+    const walk = (d) => {
+      let files = [];
+      try { files = fs.readdirSync(d); } catch (e) { return; }
+      for (const f of files) {
+        const p = path.join(d, f);
+        let st; try { st = fs.statSync(p); } catch (e) { continue; }
+        if (st.isDirectory()) walk(p);
+        else if (f.toLowerCase().endsWith('.dll')) {
+          const target = path.join(dest, f);
+          try { if (!fs.existsSync(target)) fs.copyFileSync(p, target); } catch (e) {}
+        }
+      }
+    };
+    walk(tmp);
+    return true;
+  } finally {
+    try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (e) {}
   }
-  return false;
 }
 
 /* ============ Java discovery ============ */
