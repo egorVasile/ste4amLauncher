@@ -19,6 +19,7 @@
   let APP_VERSION = '';
   const WHATSNEW_URL = 'https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/whatsnew.json';
   const NEWS_NOTES = {
+    '3.0.10': "3.0.10 — аккуратная раскладка кнопок.\n\n— «⇄ Перенести» переехала в карточку сборки, под кнопку «✎ Изменить»\n— Ряд кнопок (Играть/Экспорт/Импорт/Удалить) больше не переполняется\n— Кнопка «Объединить» аккуратно встала в шапке списка сборок",
     '3.0.9': "3.0.9 — перенос и объединение сборок.\n\n1) ПЕРЕНОС СБОРКИ\nКнопка «⇄ Перенести» в сборке: выбери новую версию Minecraft — лаунчер проверит каждый мод, найдёт его версию под новую игру и создаст новую сборку (старая останется). Миры и настройки переносятся по галочке. Моды, которых нет под новую версию, будут перечислены в конце.\n\n2) ОБЪЕДИНЕНИЕ СБОРКИ\nКнопка «🔗 Объединить»: выбери две или более сборок — из их модов соберётся новая. Повторяющиеся моды покажем списком — реши, что оставить. Конфиги и ресурспаки — по галочке.\n\n3) Читаемые названия модов во всех списках вместо ID.",
     '3.0.8': "3.0.8 — улучшенная диагностика.\n\nУмная диагностика крашей теперь распознаёт больше типов ошибок:\n— повреждённые нативные библиотеки (lwjgl.dll и др.) с подсказкой решения;\n— краши модов при старте (Sodium и др.).\n\nЛожные срабатывания при успешном запуске по-прежнему исключены.",
     '3.0.7': "3.0.7 — критическое исправление запуска сборок.\n\nИсправлена ошибка «Failed to locate library: lwjgl.dll» (краш всех сборок на старте, ошибка Sodium при запуске).\n\nПричина: нативные библиотеки (lwjgl.dll и др.) терялись при подготовке сборки. Теперь:\n— нативные библиотеки больше не пропадают;\n— DLL распаковываются всегда в правильное место, независимо от структуры скачанного файла;\n— все библиотеки проверяются по контрольной сумме — битые перекачиваются автоматически.\n\nЕсли сборка всё ещё не запускается — удалите её и создайте заново.",
@@ -1320,14 +1321,15 @@
             <span class="b-tag">${b.modCount || 0} модов</span>
           </div>
         </div>
-        <button class="b-mini play" id="bdEdit" title="Изменить название и иконку" style="align-self:flex-start;padding:8px 14px">&#9998; ИЗМЕНИТЬ</button>
+        <div class="bd-actions">
+          <button class="b-mini play" id="bdEdit" title="Изменить название и иконку">&#9998; ИЗМЕНИТЬ</button>
+          <button class="b-mini" id="bdMigrate" title="Перенести сборку на другую версию Minecraft">&#8646; ПЕРЕНЕСТИ</button>
+        </div>
       </div>
       <div class="bd-btns">
         <button class="b-mini play" id="bdPlay">&#9654; ИГРАТЬ</button>
         <button class="b-mini" id="bdExport">&#128463; ЭКСПОРТ</button>
         <button class="b-mini" id="bdImport">&#128462; ИМПОРТ</button>
-        <button class="b-mini" id="bdMigrate" title="Перенести сборку на другую версию Minecraft">&#8646; ПЕРЕНЕСТИ</button>
-        <button class="b-mini" id="bdMerge" title="Объединить сборки">&#128279; ОБЪЕДИНИТЬ</button>
         <button class="b-mini del" id="bdDel">&#10005; УДАЛИТЬ</button>
       </div>`;
     const bdImg = box.querySelector('.bd-head img');
@@ -1344,8 +1346,6 @@
     if (be) be.addEventListener('click', () => openEditBuildModal(b));
     const bm = $('#bdMigrate');
     if (bm) bm.addEventListener('click', () => openMigrateModal(b));
-    const bg = $('#bdMerge');
-    if (bg) bg.addEventListener('click', openMergeModal);
     $('#bdExport').addEventListener('click', handleExport);
     $('#bdImport').addEventListener('click', handleImport);
     $('#bdDel').addEventListener('click', () => {
