@@ -495,7 +495,10 @@ function parse(text) {
     srcAll.lastIndexOf('Description:'),
     srcAll.lastIndexOf('Uncaught exception'),
     srcAll.lastIndexOf('Failed to start the game'),
-    srcAll.lastIndexOf('Failed to start the minecraft session')
+    srcAll.lastIndexOf('Failed to start the minecraft session'),
+    srcAll.lastIndexOf('A mod crashed on startup'),
+    srcAll.lastIndexOf('Failed to load a library'),
+    srcAll.lastIndexOf('Failed to locate library')
   );
   const src = lastFatal > -1 ? srcAll.slice(lastFatal) : '';
   if (!src.trim()) return Promise.resolve([]);
@@ -630,6 +633,20 @@ function parse(text) {
         'Сбой микширования кода' + (rc ? '. Причина: ' + rc : '') + '. Обновите указанные моды или удалите несовместимый.',
         mixinIds, mixinIds.length ? 'update' : null);
     }
+  }
+
+  /* --- Нативные библиотеки (LWJGL и др.) --- */
+  if (
+    /java\.lang\.UnsatisfiedLinkError/i.test(src) ||
+    /Failed to locate library/i.test(src) ||
+    /Failed to load a library/i.test(src) ||
+    /Can't load library/i.test(src)
+  ) {
+    const dll = /Failed to locate library:\s*([\w.]+\.dll)/i.exec(src) || /Failed to load library:\s*([\w.]+\.dll)/i.exec(src);
+    cand('natives', 'Повреждены файлы игры (нативные библиотеки)',
+      (dll ? 'Не найден файл «' + dll[1] + '». ' : '') +
+      'Библиотеки игры повреждены или не распакованы. Перезапустите игру — лаунчер проверит файлы и перекачает повреждённые автоматически. Если не помогает — удалите сборку и создайте заново.',
+      [], null);
   }
 
   /* --- NoClassDefFound / NoSuchMethod (глубокий разбор) --- */
