@@ -19,7 +19,10 @@ const UA = 'st4amLauncher/1.0.0';
 let ROOT = path.join(app.getPath('appData'), '.st4amlauncher');
 function setRoot(dir) { ROOT = dir; }
 
-function log(...a) { console.log('[mods]', ...a); }
+function log(...a) {
+  console.log('[mods]', ...a);
+  try { require('./debuglog').dlog('[mods]', ...a); } catch (e) {}
+}
 
 function httpGet(url, headers = {}, tries = 5) {
   return new Promise((resolve, reject) => {
@@ -255,8 +258,8 @@ async function updateBuildMeta(id, meta) {
   }
   if (meta && typeof meta.icon === 'string') {
     if (/^[\w.-]+\.png$/i.test(meta.icon)) b.icon = meta.icon;
-    // кастомная иконка: PNG/JPG в base64 (до ~400 КБ)
-    else if (/^data:image\/(png|jpeg|jpg);base64,[A-Za-z0-9+/=]+$/.test(meta.icon) && meta.icon.length < 560000) {
+    // кастомная иконка: PNG/JPG/WEBP/GIF в base64 (до ~400 КБ)
+    else if (/^data:image\/(png|jpeg|jpg|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(meta.icon) && meta.icon.length < 560000) {
       b.icon = meta.icon;
     }
   }
@@ -302,7 +305,17 @@ async function buildCreate({ name, gameVersion, loader, icon, onProgress }) {
 }
 
 async function installLoader(build, gameVersion, loader, onProgress, preferVer) {
-  const L = loader.toLowerCase();
+  const L = String(loader || 'vanilla').toLowerCase();
+  // Ванилла: просто пишем version-json на основе официального манифеста Mojang
+  if (L === 'vanilla' || L === 'none' || L === '') {
+    if (onProgress) onProgress(0.2, 'Файлы версии ' + gameVersion + '...');
+    const base = await readBaseVersion(gameVersion);
+    const profile = {};
+    if (base.mainClass) profile.mainClass = base.mainClass;
+    await writeVersionJson(build, gameVersion, profile);
+    if (onProgress) onProgress(1, 'Версия готова');
+    return profile;
+  }
   if (L === 'fabric' || L === 'quilt') {
     const meta = L === 'fabric' ? FABRIC_META : QUILT_META;
     const url = L === 'fabric'
@@ -355,7 +368,19 @@ async function writeVersionJson(build, gameVersion, profile) {
   profile.javaVersion = base.javaVersion;
   profile.type = 'release';
   profile.minecraftVersion = gameVersion;
-  profile.libraries = [...(base.libraries || []), ...(profile.libraries || [])];
+  // Дедупликация библиотек по artifactId: ванильные (base) приоритетнее —
+  // они новее (gson 2.10.1 vs 2.8.9 и т.п.). Иначе грузится старая версия
+  // и моды падают с NoSuchMethodError
+  const artId = (lib) => {
+    const n = String((lib && lib.name) || '');
+    if (n.indexOf(':') > -1) { const p = n.split(':'); return p[1] || n; }
+    const seg = n.split(/[\\/]/);
+    return seg.length >= 3 ? seg[seg.length - 3] : n;
+  };
+  const seen = new Set();
+  const baseLibs = (base.libraries || []).filter(l => { const a = artId(l); if (seen.has(a)) return false; seen.add(a); return true; });
+  const extraLibs = (profile.libraries || []).filter(l => !seen.has(artId(l)));
+  profile.libraries = [...baseLibs, ...extraLibs];
   if (!profile.arguments) profile.arguments = {};
   if (!Array.isArray(profile.arguments.game) || profile.arguments.game.length === 0) {
     profile.arguments.game = base.arguments && Array.isArray(base.arguments.game) ? base.arguments.game : [];
@@ -436,7 +461,14 @@ async function installForgeLike(build, gameVersion, loader, onProgress) {
   // Общий кэш установки: одинаковые версии (gameVersion + лоадер + версия лоадера)
   // ставятся ОДИН раз, новые сборки просто копируют готовый клиент (не качают заново)
   const stageDir = path.join(ROOT, 'cache', 'forge-install', `${loader}-${gameVersion}-${ver}`);
-  const stagedOk = fs.existsSync(path.join(stageDir, 'libraries')) && fs.existsSync(path.join(stageDir, 'versions'));
+  // Кэш валиден только если установщик дошёл до конца: у NeoForge должен быть
+  // пропатченный клиент (-client.jar), у Forge — джарник версии в versions/
+  const clientJarOk = isNeo
+    ? fs.existsSync(path.join(stageDir, 'libraries', 'net', 'neoforged', 'neoforge', ver, `neoforge-${ver}-client.jar`))
+    : fs.existsSync(path.join(stageDir, 'versions', ver, ver + '.jar'));
+  const stagedOk = clientJarOk
+    && fs.existsSync(path.join(stageDir, 'libraries'))
+    && fs.existsSync(path.join(stageDir, 'versions'));
   if (!stagedOk) {
     const needMajor = forgeJavaMajor(gameVersion);
     let java = await findJavaMajor(needMajor);
@@ -525,17 +557,45 @@ async function buildForgeProfile(build, gameVersion, isNeo) {
   const bdir = buildDir(build.id);
   const gameDir = path.join(bdir, 'game');
   const libraries = [];
-  const libRoot = path.join(gameDir, 'libraries');
-  if (fs.existsSync(libRoot)) {
-    for (const group of fs.readdirSync(libRoot)) {
-      collectLibs(path.join(libRoot, group), group, libraries);
+  // Берём библиотеки из json установщика (авторский список рантайма), а НЕ
+  // скан диска: в game/libraries лежат и промежуточные джарники установки
+  // (srg/slim/extra, бинарные патчеры) — они ломают запуск задвоением модулей
+  const vdir = path.join(gameDir, 'versions');
+  let loaderJson = null;
+  if (fs.existsSync(vdir)) {
+    for (const n of fs.readdirSync(vdir)) {
+      if (n === gameVersion) continue; // ванильную версию пропускаем
+      const pj = path.join(vdir, n, n + '.json');
+      if (fs.existsSync(pj)) { loaderJson = JSON.parse(await fsp.readFile(pj, 'utf8')); break; }
+    }
+  }
+  const mavenRel = (name) => {
+    const p = String(name).split(':');
+    if (p.length < 3) return null;
+    return p[0].split('.').join('/') + '/' + p[1] + '/' + p[2] + '/' + p[1] + '-' + p[2] + '.jar';
+  };
+  for (const l of ((loaderJson && loaderJson.libraries) || [])) {
+    const rel = (l.downloads && l.downloads.artifact && l.downloads.artifact.path) || mavenRel(l.name);
+    if (!rel) continue;
+    const abs = path.join(gameDir, 'libraries', rel.split('/').join(path.sep));
+    libraries.push({ name: l.name, artifact: { path: rel, size: null, url: null, absPath: abs } });
+  }
+  // Джарники NeoForge установщик в json НЕ вписывает — добавляем ОБА как
+  // библиотеки. Дубль модуля 'neoforge' решает -DmergeModules (ниже), который
+  // сливает их в один модуль. Главный jar сборки остаётся ванильным — его
+  // исключает ignoreList, а классы игры дают эти два джарника
+  if (loaderJson && loaderJson.id && /^neoforge-(.+)$/.test(loaderJson.id)) {
+    const lv = loaderJson.id.replace(/^neoforge-/, '');
+    for (const kind of ['client', 'universal']) {
+      const rel = `net/neoforged/neoforge/${lv}/neoforge-${lv}-${kind}.jar`;
+      const abs = path.join(gameDir, 'libraries', rel.split('/').join(path.sep));
+      if (fs.existsSync(abs)) libraries.push({ name: `net.neoforged:neoforge:${lv}:${kind}`, artifact: { path: rel, size: null, url: null, absPath: abs } });
     }
   }
   let mainClass = isNeo ? 'net.neoforged.bootstrap.Bootstrap' : 'cpw.mods.bootstraplauncher.Bootstrap';
   let argumentsGame = base.arguments;
   try {
-    const vdir = path.join(gameDir, 'versions');
-    if (fs.existsSync(vdir)) {
+    const vdir = path.join(gameDir, 'versions');    if (fs.existsSync(vdir)) {
       // Установщик кладёт сюда и ванильную (<gameVersion>), и лоадерную
       // (neoforge-x.y.z / forge-x.y.z) версии — выбираем именно лоадерную
       const names = fs.readdirSync(vdir)
@@ -554,6 +614,41 @@ async function buildForgeProfile(build, gameVersion, isNeo) {
       }
     }
   } catch (e) {}
+  // inheritsFrom: vanilla-аргументы игры (--username/--version/--accessToken...)
+  // ОБЯЗАТЕЛЬНЫ — json лоадера их не содержит, только --fml.*. Склеиваем:
+  // ванильные первыми, лоадерные следом
+  const bArgs = (base.arguments && typeof base.arguments === 'object') ? base.arguments : {};
+  const lArgs = (argumentsGame && typeof argumentsGame === 'object') ? argumentsGame : {};
+  argumentsGame = {
+    game: [...(Array.isArray(bArgs.game) ? bArgs.game : []), ...(Array.isArray(lArgs.game) ? lArgs.game : [])],
+    jvm: [...(Array.isArray(bArgs.jvm) ? bArgs.jvm : []), ...(Array.isArray(lArgs.jvm) ? lArgs.jvm : [])]
+  };
+  // NeoForge: приводим JVM-аргументы к официальному виду (как у рабочих
+  // лаунчеров): ignoreList должен исключать из boot-слоя модульные джарники
+  // (-p), сами джарники neoforge- (их FML забирает через legacyClassPath),
+  // client-extra и главный jar. Плюс пустые fml.*LayerLibraries
+  if (isNeo && loaderJson && loaderJson.id && /^neoforge-(.+)$/.test(loaderJson.id)) {
+    argumentsGame = JSON.parse(JSON.stringify(argumentsGame || {}));
+    if (!Array.isArray(argumentsGame.jvm)) argumentsGame.jvm = [];
+    const jvm = argumentsGame.jvm;
+    // базовые имена модульных джарников из -p
+    const modBasenames = [];
+    for (let i = 0; i < jvm.length; i++) {
+      if (jvm[i] === '-p' && typeof jvm[i + 1] === 'string') {
+        String(jvm[i + 1]).split(/;|\$\{classpath_separator\}/).forEach(x => {
+          const b = path.basename(x.trim());
+          if (b && b.indexOf('${') === -1) modBasenames.push(b);
+        });
+      }
+    }
+    const ignoreVal = [...modBasenames, 'client-extra', 'neoforge-', '${version_name}.jar'].join(',');
+    const ignoreIdx = jvm.findIndex(a => typeof a === 'string' && a.indexOf('-DignoreList=') === 0);
+    const ignoreArg = '-DignoreList=' + ignoreVal;
+    if (ignoreIdx > -1) jvm[ignoreIdx] = ignoreArg; else jvm.unshift(ignoreArg);
+    for (const extra of ['-Dfml.pluginLayerLibraries=', '-Dfml.gameLayerLibraries=']) {
+      if (!jvm.some(a => typeof a === 'string' && a.indexOf(extra) === 0)) jvm.unshift(extra);
+    }
+  }
   const profile = {
     id: build.id,
     mainClass,
@@ -1776,12 +1871,43 @@ async function ensureBuildVersion(build) {
   return true;
 }
 
+// Скачивает картинку по URL и ставит её иконкой сборки (до ~450КБ)
+async function setIconFromUrl(buildId, url) {
+  if (!url || String(url).indexOf('http') !== 0) throw new Error('Некорректный URL иконки');
+  const buf = await httpGet(url);
+  if (!buf || !buf.length) throw new Error('Иконка не скачалась');
+  if (buf.length > 450 * 1024) throw new Error('Иконка слишком большая');
+  let type = 'image/png';
+  if (buf[0] === 0xFF && buf[1] === 0xD8) type = 'image/jpeg';
+  else if (buf.length > 11 && buf.slice(8, 12).toString('ascii') === 'WEBP') type = 'image/webp';
+  else if (buf[0] === 0x47 && buf[1] === 0x49) type = 'image/gif';
+  const dataUrl = 'data:' + type + ';base64,' + buf.toString('base64');
+  return updateBuildMeta(buildId, { icon: dataUrl });
+}
+
+// Импорт сборки: ищем модпак с таким же названием в каталоге Modrinth
+// и ставим его обложку (только если у сборки случайная иконка)
+async function setIconFromName(buildId, name) {
+  const builds = await loadBuilds();
+  const b = builds.find(x => x.id === buildId);
+  if (!b) throw new Error('Сборка не найдена');
+  if (String(b.icon || '').indexOf('data:') === 0) return b; // своя иконка — не трогаем
+  const q = encodeURIComponent(String(name || b.name).trim());
+  const u = 'https://api.modrinth.com/v2/search?query=' + q + '&limit=5&facets=' + encodeURIComponent('[["project_type:modpack"]]');
+  log('icon-by-name: ищем', q);
+  const res = JSON.parse((await httpGet(u)).toString('utf8'));
+  const hit = (res.hits || []).find(h => h && h.icon_url);
+  log('icon-by-name: hits=', (res.hits || []).length, '| hit=', hit && hit.title);
+  if (!hit) return b;
+  try { return await setIconFromUrl(buildId, hit.icon_url); } catch (e) { log('icon-by-name: ошибка иконки:', e && e.message); return b; }
+}
+
 module.exports = {
   setRoot,
   mrSearch, mrProject, mrProjectVersions, mrVersion, mrCategories, mrLoaders, mrGameVersions,
   mrBatchProjects, mrBatchVersions,
   buildsList, buildCreate, deleteBuild, installedMods, installProject, deleteMod,
-  updateBuildMeta, ensureBuildVersion,
+  updateBuildMeta, ensureBuildVersion, setIconFromUrl, setIconFromName,
   loadInstalled,
   exportBuild, importBuild, importMrpack, findModrinthByHash, packConfigs, unpackConfigs,
   installModpack,
