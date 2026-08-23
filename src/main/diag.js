@@ -498,7 +498,9 @@ function parse(text) {
     srcAll.lastIndexOf('Failed to start the minecraft session'),
     srcAll.lastIndexOf('A mod crashed on startup'),
     srcAll.lastIndexOf('Failed to load a library'),
-    srcAll.lastIndexOf('Failed to locate library')
+    srcAll.lastIndexOf('Failed to locate library'),
+    srcAll.lastIndexOf('Incompatible mods found'),
+    srcAll.lastIndexOf('Mod resolution failed')
   );
   const src = lastFatal > -1 ? srcAll.slice(lastFatal) : '';
   if (!src.trim()) return Promise.resolve([]);
@@ -707,9 +709,43 @@ function parse(text) {
     /Error occurred during initialization of VM/i.test(src)
   ) {
     const deep = deepJavaVersion(src);
+    const jm = deep ? (/Java (\d+)\+/.exec(deep.fix) || [])[1] : null;
     cand('no_java', 'Проблема с Java',
       deep ? deep.detail : 'Не найдена подходящая Java или она несовместима с этой версией Minecraft. Укажите путь к Java в настройках или установите Java из подсказки.',
-      [], null, { fix: deep ? deep.fix : 'Проверьте настройки Java в лаунчере.' });
+      [], null, { fix: deep ? deep.fix : 'Проверьте настройки Java в лаунчере.', javaMajor: jm ? parseInt(jm, 10) : null });
+  }
+
+  /* --- Конфликты модов (Fabric Loader: Incompatible mods found) --- */
+  if (
+    /Incompatible mods found/i.test(src) ||
+    /Mod resolution failed/i.test(src)
+  ) {
+    // Reason/Immediate reason идут ПЕРЕД маркером — парсим весь текст
+    const zone = srcAll;
+    const deps = [];
+    const depSeen = new Set();
+    const conflicts = [];
+    const re = /(HARD_DEP_NO_CANDIDATE|NEG_HARD_DEP|HARD_DEP)\s+([\w.-]+)\s+[\w.+-]+\s+\{(?:depends|breaks)\s+([\w.-]+)/g;
+    let mm;
+    while ((mm = re.exec(zone))) {
+      const kind2 = mm[1], modid = mm[2], other = mm[3];
+      if (kind2 === 'NEG_HARD_DEP') {
+        if (!conflicts.some(c2 => c2.mod === modid && c2.breaks === other)) conflicts.push({ mod: modid, breaks: other });
+      } else if (!depSeen.has(other)) {
+        depSeen.add(other);
+        deps.push({ mod: modid, dep: other });
+      }
+    }
+    const fixLine = (/Fix:\s*(.+)$/m.exec(zone) || [])[1] || '';
+    const ids = [];
+    deps.forEach(d => { if (!ids.includes(d.dep)) ids.push(d.dep); });
+    conflicts.forEach(c2 => { if (!ids.includes(c2.mod)) ids.push(c2.mod); if (!ids.includes(c2.breaks)) ids.push(c2.breaks); });
+    cand('mod_conflict', 'Конфликт модов',
+      (deps.length ? 'Не хватает зависимостей: ' + deps.map(d => d.dep).join(', ') + '. ' : '') +
+      (conflicts.length ? 'Несовместимые моды: ' + conflicts.map(c2 => c2.mod + ' (ломает ' + c2.breaks + ')').join(', ') + '.' : '') +
+      (fixLine ? ' Рекомендация загрузчика: ' + fixLine : ''),
+      ids, ids.length ? 'install' : null,
+      { installDeps: deps, conflicts });
   }
 
   /* --- Assets --- */
@@ -813,7 +849,12 @@ function parse(text) {
 
   const problems = [];
   for (const c of merged.values()) {
-    problems.push({ kind: c.kind, title: c.title, detail: c.detail, fix: c.fix || null, modIds: c.ids, actionForMod: c.actionForMod, relations, ranges });
+    const pr = { kind: c.kind, title: c.title, detail: c.detail, fix: c.fix || null, modIds: c.ids, actionForMod: c.actionForMod, relations, ranges };
+    // структурные данные для автофикса (installDeps, conflicts, javaMajor и т.п.)
+    for (const k of Object.keys(c)) {
+      if (['kind', 'title', 'detail', 'fix', 'ids', 'actionForMod'].indexOf(k) === -1 && !(k in pr)) pr[k] = c[k];
+    }
+    problems.push(pr);
   }
 
   return resolveAll(problems, new Resolver());
@@ -847,7 +888,12 @@ async function resolveAll(problems, resolver) {
       if (ranges[id] || ranges[key]) entry.needVersion = ranges[id] || ranges[key];
       modsList.push(entry);
     }
-    out.push({ kind: p.kind, title: p.title, detail: p.detail, fix: p.fix || null, mods: modsList });
+    const outEntry = { kind: p.kind, title: p.title, detail: p.detail, fix: p.fix || null, mods: modsList };
+    // структурные данные для автофикса
+    for (const k of Object.keys(p)) {
+      if (['kind', 'title', 'detail', 'fix', 'modIds', 'actionForMod', 'relations', 'ranges'].indexOf(k) === -1) outEntry[k] = p[k];
+    }
+    out.push(outEntry);
   }
   return out;
 }
