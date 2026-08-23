@@ -621,9 +621,17 @@ async function findJavaFor(vj, onProgress) {
 
 /* ============ Launch ============ */
 
-function buildClasspath(vj) {
+// Базовое имя библиотеки без версии: 'asm-9.3' -> 'asm' (для сопоставления модулей)
+function baseLibName(file) {
+  return String(file).replace(/\.jar$/i, '').replace(/-([\d][\w.]*)$/, '');
+}
+
+function buildClasspath(vj, moduleJars) {
   const d = dirs();
   const parts = [path.join(d.versions, vj.id, vj.id + '.jar')];
+  // Джарники с модульного пути (-p) нельзя дублировать в classpath —
+  // BootstrapLauncher падает с 'Module already on module path'
+  const modBases = new Set([...(moduleJars || [])].map(p => baseLibName(path.basename(p))));
   const libs = vj.libraries || [];
   for (const lib of libs) {
     if (lib.rules && !rulesAllow(lib.rules, 'windows')) continue;
@@ -631,12 +639,15 @@ function buildClasspath(vj) {
     if (isNative && !nativeForUs(file)) continue;
     const abs = artifact && artifact.absPath;
     const p = abs && fs.existsSync(abs) ? abs : path.join(d.libraries, dir, file);
+    if (moduleJars && moduleJars.size) {
+      if (modBases.has(baseLibName(file))) continue;
+    }
     if (fs.existsSync(p)) parts.push(p);
   }
   return parts.join(';');
 }
 
-function jvmArgs(vj, ramGb, javaMajorVer) {
+function jvmArgs(vj, ramGb, javaMajorVer, ctx) {
   const d = dirs();
   const natives = path.join(d.versions, vj.id, 'natives');
   const ramMb = Math.round(ramGb * 1024);
@@ -689,15 +700,33 @@ function jvmArgs(vj, ramGb, javaMajorVer) {
   const custom = String(store.get('jvmArgs') || '').trim();
   if (custom) base.push(...custom.split(/\s+/));
   const fromJson = [];
+  // Карта подстановки для JVM-плейсхолдеров NeoForge/Forge:
+  // ${library_directory}, ${classpath_separator}, ${version_name} и др.
+  const jmap = {
+    libraryDir: (ctx && ctx.libraryDir) || path.join(d.libraries),
+    gameDir: (ctx && ctx.gameDir) || d.game,
+    version: vj.id,
+    nativesDir: natives,
+    assetsDir: path.join(d.assets),
+    assetIndex: (vj.assetIndex || {}).id || 'legacy',
+    launcherName: 'st4amLauncher',
+    launcherVersion: '0.1.0'
+  };
+  // Ванильный json заканчивается на "-cp ${classpath}" — пару пропускаем,
+  // свой -cp launchVersion добавит сам после всех jvm-аргументов
+  const pushJ = (v) => { if (v !== '') fromJson.push(v); };
   if (vj.arguments && Array.isArray(vj.arguments.jvm)) {
-    for (const a of vj.arguments.jvm) {
-      if (typeof a === 'string') fromJson.push(a);
-      else if (a.rules && rulesAllow(a.rules, 'windows') && Array.isArray(a.value)) {
-        fromJson.push(...a.value);
+    for (let i = 0; i < vj.arguments.jvm.length; i++) {
+      const a = vj.arguments.jvm[i];
+      if (typeof a === 'string') {
+        if (a === '-cp' && vj.arguments.jvm[i + 1] === '${classpath}') { i++; continue; }
+        pushJ(subst(a, jmap));
+      } else if (a.rules && rulesAllow(a.rules, 'windows') && Array.isArray(a.value)) {
+        for (const v of a.value) pushJ(subst(v, jmap));
       }
     }
   } else if (vj.minecraftArguments) {
-    fromJson.push('-Dlegacy.javaClasspath=', '');
+    fromJson.push('-Dlegacy.javaClasspath=');
   }
   const l4j = log4jCoreMinor(vj);
   if (l4j >= 10 && l4j < 15) base.push('-Dlog4j2.formatMsgNoLookups=true');
@@ -732,7 +761,9 @@ function gameArgs(vj, opts) {
     resolutionWidth: opts.resolutionW || '',
     resolutionHeight: opts.resolutionH || '',
     nativesDir: path.join(d.versions, vj.id, 'natives'),
-    libraryDir: path.join(d.libraries),
+    libraryDir: (opts.gameDir && fs.existsSync(path.join(opts.gameDir, 'libraries')))
+      ? path.join(opts.gameDir, 'libraries')
+      : path.join(d.libraries),
     launcherName: 'st4amLauncher',
     launcherVersion: '0.1.0',
     primaryJar: path.join(d.versions, vj.id, vj.id + '.jar')
@@ -762,31 +793,21 @@ function gameArgs(vj, opts) {
 }
 
 function subst(s, map) {
-  if (s === '${auth_player_name}') return map.username;
-  if (s === '${version_name}') return map.version;
-  if (s === '${game_directory}') return map.gameDir;
-  if (s === '${game_assets}') return map.gameAssets || '';
-  if (s === '${assets_root}') return map.assetsDir;
-  if (s === '${assets_index_name}') return map.assetIndex;
-  if (s === '${auth_uuid}') return map.uuid;
-  if (s === '${auth_access_token}') return map.accessToken;
-  if (s === '${auth_xuid}') return '';
-  if (s === '${clientid}') return '';
-  if (s === '${user_type}') return map.userType;
-  if (s === '${version_type}') return map.versionType;
-  if (s === '${resolution_width}') return map.resolutionWidth || '';
-  if (s === '${resolution_height}') return map.resolutionHeight || '';
-  if (s === '${classpath_separator}') return ';';
-  if (s === '${natives_directory}') return map.nativesDir || '';
-  if (s === '${library_directory}') return map.libraryDir || '';
-  if (s === '${game_libraries_directory}') return map.libraryDir || '';
-  if (s === '${launcher_name}') return map.launcherName || '';
-  if (s === '${launcher_version}') return map.launcherVersion || '';
-  if (s === '${primary_jar}') return map.primaryJar || '';
-  if (s === '${profile_name}') return map.username;
-  if (s === '${user_properties}') return '{}';
-  if (s.startsWith('${') && s.endsWith('}')) return '';
-  return s;
+  // Замена плейсхолдеров ВНУТРИ строк (например '-Djava.library.path=${natives_directory}'),
+  // а не только строк-плейсхолдеров целиком
+  const full = {
+    auth_player_name: map.username, version_name: map.version, game_directory: map.gameDir,
+    game_assets: map.gameAssets || '', assets_root: map.assetsDir, assets_index_name: map.assetIndex,
+    auth_uuid: map.uuid, auth_access_token: map.accessToken, auth_xuid: '', clientid: '',
+    user_type: map.userType, version_type: map.versionType,
+    resolution_width: map.resolutionWidth || '', resolution_height: map.resolutionHeight || '',
+    natives_directory: map.nativesDir || '', library_directory: map.libraryDir || '',
+    game_libraries_directory: map.libraryDir || '', launcher_name: map.launcherName || '',
+    launcher_version: map.launcherVersion || '', primary_jar: map.primaryJar || '',
+    profile_name: map.username, user_properties: '{}', classpath_separator: ';',
+    classpath_directory: map.classpathDir || '', classpath: map.classpath || ''
+  };
+  return String(s).replace(/\$\{([a-zA-Z0-9_]+)\}/g, (m, k) => (k in full) ? String(full[k]) : '');
 }
 
 /* ============ Version art (official launcher images) ============ */
@@ -906,7 +927,16 @@ let currentProcess = null;
 
 async function launchVersion(opts, onEvent) {
   if (currentProcess) throw new Error('Игра уже запущена');
-  const emit = (type, data) => onEvent && onEvent(type, data);
+  const { dlog } = require('./debuglog');
+  const emit = (type, data) => {
+    if (type === 'log' && data && data.line) dlog('[лог]', String(data.line));
+    else if (type === 'stage') dlog('[этап]', (data && data.stage) || '', data && Math.round((data.pct || 0) * 100) + '%');
+    else if (type === 'error') dlog('[ОШИБКА]', data);
+    else if (type === 'exit') dlog('[выход] код', data && data.code);
+    else if (type === 'diagnosis') dlog('[диагноз]', JSON.stringify(data).slice(0, 2000));
+    onEvent && onEvent(type, data);
+  };
+  dlog('===== ЗАПУСК ИГРЫ =====', 'version:', opts.version, '| buildId:', opts.buildId || '-', '| ник:', opts.username || '-', '| RAM:', opts.ram, 'GB');
 
   const vj = await getVersionJson(opts.version);
   const wantJava = javaVersionNeeded(vj);
@@ -957,9 +987,26 @@ async function launchVersion(opts, onEvent) {
   await extractNatives(vj);
   emit('stage', { stage: 'ПОДГОТОВКА', pct: 0.96 });
 
-  const cp = buildClasspath(vj);
+  const cp0 = vj.arguments && Array.isArray(vj.arguments.jvm) ? vj.arguments.jvm : [];
+  const moduleJars = new Set();
+  for (let i = 0; i < cp0.length; i++) {
+    if (cp0[i] === '-p' && typeof cp0[i + 1] === 'string') {
+      // пути разделены ; или плейсхолдером ${classpath_separator} (в сыром json)
+      String(cp0[i + 1]).split(/;|\$\{classpath_separator\}/).forEach(x => {
+        const b = path.basename(x.trim());
+        if (b && b.indexOf('${') === -1) moduleJars.add(b);
+      });
+    }
+  }
+  const cp = buildClasspath(vj, moduleJars);
   const jreMajor = await javaMajor(java);
-  const jvm = jvmArgs(vj, opts.ram || 2, jreMajor);
+  const jvm = jvmArgs(vj, opts.ram || 2, jreMajor, {
+    // У сборок Forge/NeoForge модульные джарники лежат в libraries самой сборки
+    libraryDir: opts.buildId && fs.existsSync(path.join(gameDir, 'libraries'))
+      ? path.join(gameDir, 'libraries')
+      : path.join(d.libraries),
+    gameDir
+  });
   const gargs = gameArgs(vj, { ...opts, gameDir, gameAssets: virtAssets });
   const all = [...jvm, '-cp', cp, vj.mainClass || 'net.minecraft.client.main.Main', ...gargs];
   const an = (vj.assetIndex || {}).id || 'legacy';
@@ -1001,6 +1048,19 @@ async function launchVersion(opts, onEvent) {
           })
           .catch(e => log('diagnosis error', e && e.message));
       } catch (e) { log('diag require error', e && e.message); }
+      // Хвост лога игры в файл (для анализа после закрытия лаунчера)
+      try {
+        dlog('[хвост вывода игры]', String(outBuf).slice(-4000));
+        const hs = path.join(gameDir, 'hs_err_pid*.log');
+        const files = fs.existsSync(path.dirname(hs)) ? fs.readdirSync(path.dirname(hs)).filter(f => f.startsWith('hs_err_pid')) : [];
+        for (const f of files) {
+          try {
+            const full = path.join(gameDir, f);
+            dlog('[краш-файл ' + f + ']', fs.readFileSync(full, 'utf8').split(/\r?\n/).slice(0, 40).join('\n'));
+            break;
+          } catch (e) {}
+        }
+      } catch (e) {}
     }
   });
   emit('started', { pid: currentProcess.pid });
