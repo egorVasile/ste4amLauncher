@@ -1045,6 +1045,10 @@
   .b-empty { font-family: var(--mc-font-body); font-size: 11px; color: var(--mc-grey-3); text-align: center; padding: 18px 6px; }
   .b-cat { flex: 1.25; display: flex; flex-direction: column; min-width: 0; }
   .b-types { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+  .b-mp-filters { display: flex; gap: 8px; margin-bottom: 10px; }
+  .b-mp-filters.hidden { display: none; }
+  .b-mp-sel { flex: 1; background: var(--mc-grey-5); border: 2px solid var(--mc-off-black); color: var(--mc-off-white); padding: 8px 9px; font-family: var(--mc-font); font-size: 12px; outline: none; cursor: pointer; }
+  .b-mp-sel:focus { border-color: var(--mc-green); }
   .b-search { display: flex; gap: 8px; margin-bottom: 10px; }
   .b-search input { flex: 1; background: var(--mc-grey-5); border: 2px solid var(--mc-off-black); color: var(--mc-off-white); padding: 9px 11px; font-family: var(--mc-font); font-size: 13.5px; outline: none; }
   .b-search input:focus { border-color: var(--mc-green-4); }
@@ -1232,6 +1236,18 @@
             <div class="panel">
               <div class="b-title">КАТАЛОГ MODRINTH <small id="bResultInfo"></small></div>
               <div class="b-types" id="bTypes"></div>
+              <div class="b-mp-filters hidden" id="mpFilters">
+                <select id="mpLoader" class="b-mp-sel">
+                  <option value="">ЗАГРУЗЧИК: ЛЮБОЙ</option>
+                  <option value="fabric">FABRIC</option>
+                  <option value="forge">FORGE</option>
+                  <option value="neoforge">NEOFORGE</option>
+                  <option value="quilt">QUILT</option>
+                </select>
+                <select id="mpVersion" class="b-mp-sel">
+                  <option value="">ВЕРСИЯ: ЛЮБАЯ</option>
+                </select>
+              </div>
               <div class="b-search">
                 <input type="text" id="bSearch" placeholder="Поиск модов, ресурспаков, шейдеров..."/>
                 <button class="b-go" id="bSearchBtn">ПОИСК</button>
