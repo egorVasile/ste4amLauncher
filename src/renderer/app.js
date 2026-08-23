@@ -19,6 +19,7 @@
   let APP_VERSION = '';
   const WHATSNEW_URL = 'https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/whatsnew.json';
   const NEWS_NOTES = {
+    '3.0.5': "3.0.5 — большие исправления запуска сборок.\n\n1) ЗАГРУЗЧИКИ FORGE/NEOFORGE РАБОТАЮТ\nПолностью переписана установка: модпаки и сборки на NeoForge/Forge запускаются с модами (раньше падали с «Version not found» и ошибками модулей).\n\n2) ВАНИЛЬНЫЕ СБОРКИ\nСоздание обычной сборки без модов больше не даёт ошибку «Неизвестный загрузчик».\n\n3) ФИЛЬТРЫ МОДПАКОВ\nВ каталоге МОДПАКОВ: выбор загрузчика (Fabric/Forge/NeoForge/Quilt) и версии игры.\n\n4) АВТОИКОНКИ\nИконка мода сама становится обложкой сборки. При импорте — обложка ищется по названию. При экспорте со случайной иконкой — предупреждение.\n\n5) ЛОГИ\nВесь запуск пишется в logs/debug.log — при ошибке пришлите файл, и мы быстро починим.\n\n6) Честная диагностика: «не хватает класса» больше не появляется при успешном запуске.",
     '3.0.4': "3.0.4 — исправление установки модпаков.\n\n1) ЗАГРУЗЧИКИ FORGE И NEOFORGE ТЕПЕРЬ РАБОТАЮТ\nИсправлена ошибка, из-за которой модпаки с Forge/NeoForge не получали загрузчик и не запускались («Version not found»). Теперь профиль ставится корректно.\n\n2) АВТОДОРАБОТКА ПРИ ЗАПУСКЕ\nЕсли сборке не хватило лоадера (например, из-за сбоя сети при импорте), лаунчер сам доустановит его при нажатии «Играть».\n\n3) НАДЁЖНОСТЬ\nУстановка лоадера при импорте модпака повторяется до 3 раз при сбоях сети.",
     '3.0.3': '3.0.3 — скачивание модпаков из каталога.\n\n1) ВКЛАДКА «МОДПАКИ» В КАТАЛОГЕ\nСправа в каталоге вместо датапаков появилась вкладка МОДПАКИ: тысячи готовых сборок Modrinth (Fabulously Optimized, Cobblemon и др.) с обложками.\n\n2) УСТАНОВКА ОДНИМ КЛИКОМ\nОткройте модпак, выберите версию MINECRAFT и загрузчик из доступных — кнопка «Установить как сборку» скачает пакет и создаст готовую сборку.\n\n3) УМНОЕ КОПИРОВАНИЕ\nМоды, уже скачанные в другие сборки с той же версией игры, копируются мгновенно без повторного скачивания.',
     '3.0.2': '3.0.2 — импорт .mrpack и удобство.\n\n' +
@@ -1103,6 +1104,9 @@
   const CAT_CACHE = {}; // кэш результатов поиска Modrinth (по ключу запроса)
   const B_TYPES = [['mod', 'МОДЫ'], ['resourcepack', 'РЕСУРСПАКИ'], ['shaderpack', 'ШЕЙДЕРЫ'], ['modpack', 'МОДПАКИ']];
   let B_TYPE = 'mod';
+  let MP_LOADER = '';
+  let MP_VERSION = '';
+  let MP_VERSIONS_FILLED = false;
   let INST_QUERY = '';
   // Кэш названий/иконок модов с Modrinth (по slug) — чтобы не дёргать API на каждом рендере
   const instInfoCache = {};
@@ -1190,6 +1194,31 @@
       mcToast('СНАЧАЛА ВЫБЕРИТЕ СБОРКУ');
       return;
     }
+    // Предупреждение: у сборки случайная/стандартная иконка — при импорте
+    // у друга будет серая обложка (иконка не переносится как файл мода)
+    if (String(CURRENT_BUILD.icon || '').indexOf('data:') !== 0) {
+      openModal('Иконка сборки', `
+        <div style="font-family:var(--mc-font-body);font-size:12px;line-height:1.6;color:var(--mc-grey-2)">
+          У сборки «${escapeHtml(CURRENT_BUILD.name)}» стоит <b>случайная иконка</b>.
+          После импорта на другом компьютере обложки не будет — поставьте свою картинку
+          через ✎ ИЗМЕНИТЬ → СВОЯ ИКОНКА, либо мы попробуем найти обложку по названию автоматически.
+        </div>
+        <div style="display:flex;gap:8px;margin-top:12px">
+          <button class="secondary-btn" id="expIconCancel" style="margin:0;flex:1">ОТМЕНА</button>
+          <button class="play-btn" id="expIconGo" style="margin:0;flex:1;font-size:14px">ЭКСПОРТИРОВАТЬ</button>
+        </div>
+      `, false, () => {
+        const cc = $('#expIconCancel');
+        const gg = $('#expIconGo');
+        if (cc) cc.addEventListener('click', () => modal.classList.remove('show'));
+        if (gg) gg.addEventListener('click', () => { modal.classList.remove('show'); doExport(); });
+      });
+      return;
+    }
+    doExport();
+  }
+
+  async function doExport() {
     const res = await api.invoke('builds:export', CURRENT_BUILD.id);
     if (res.canceled) return;
     if (!res.ok) {
@@ -1242,6 +1271,13 @@
     if (res.ok) {
       mcToast('СБОРКА ИМПОРТИРОВАНА: ' + res.buildId);
       refreshBuilds();
+      // Иконка по названию: если у импортированной сборки случайная иконка —
+      // ищем модпак с тем же названием в каталоге и ставим его обложку
+      if (res.buildId) {
+        api.invoke('builds:set-icon-by-name', { buildId: res.buildId, name: res.name || '' })
+          .then(b => { if (b && b.icon) refreshBuilds(); })
+          .catch(() => {});
+      }
       setTimeout(() => modal && modal.classList.remove('show'), 500);
     } else {
       openModal('Ошибка импорта', `
@@ -1498,6 +1534,12 @@
   function buildTypeButtons() {
     const box = $('#bTypes');
     if (!box) return;
+    const mpf = $('#mpFilters');
+    if (mpf) {
+      mpf.classList.toggle('hidden', B_TYPE !== 'modpack');
+      const mv = $('#mpVersion');
+      if (B_TYPE === 'modpack' && mv && typeof mv._fill === 'function') mv._fill();
+    }
     box.innerHTML = '';
     B_TYPES.forEach(t => {
       const btn = document.createElement('div');
@@ -1526,6 +1568,8 @@
     if (B_TYPE === 'modpack') {
       // модпаки: без привязки к текущей сборке (пак сам несёт версию игры и лоадер)
       facets.push(['project_type:modpack']);
+      if (MP_LOADER) facets.push(['categories:' + MP_LOADER]);
+      if (MP_VERSION) facets.push(['versions:' + MP_VERSION]);
     } else {
       if (CURRENT_BUILD) {
         facets.push(['versions:' + CURRENT_BUILD.gameVersion]);
@@ -2193,6 +2237,7 @@
       .then(r => {
         setStatus('УСТАНОВЛЕНО: ' + (r.count || 1) + ' ФАЙЛ(ОВ)', '');
         hideProgress();
+        autoIconFromMod(h);
         afterModInstalled(h, versionId);
         refreshBuilds();
       })
@@ -2200,6 +2245,25 @@
         setStatus('ОШИБКА: ' + (err.message || err), 'busy');
         hideProgress();
       });
+  }
+
+  // Автоиконка: если у сборки случайная/стандартная иконка (не своя картинка),
+  // после установки мода ставим обложку этого мода иконкой сборки
+  function autoIconFromMod(h) {
+    if (!CURRENT_BUILD || !h || !h.icon_url) return;
+    if (String(CURRENT_BUILD.icon || '').indexOf('data:') === 0) return; // своя иконка
+    api.invoke('builds:set-icon-from-url', { buildId: CURRENT_BUILD.id, url: h.icon_url })
+      .then(b => {
+        if (b && b.icon) {
+          CURRENT_BUILD.icon = b.icon;
+          const bb = BUILD_LIST.find(x => x.id === CURRENT_BUILD.id);
+          if (bb) bb.icon = b.icon;
+          renderBuilds();
+          renderDetailBuild();
+          mcToast('ИКОНКА СБОРКИ: ОБЛОЖКА МОДА');
+        }
+      })
+      .catch(() => {});
   }
 
   // После установки: плавно золото -> зелёный -> обычная на нужной версии,
@@ -2302,6 +2366,24 @@
     let instSearchT = null;
     $('#bNewBtn').addEventListener('click', openCreateModal);
     $('#bSearchBtn').addEventListener('click', () => { B_OFFSET = 0; refreshCatalog(); });
+    // Фильтры модпаков: загрузчик + версия игры
+    const mpLoader = $('#mpLoader');
+    const mpVersion = $('#mpVersion');
+    if (mpLoader) mpLoader.addEventListener('change', () => { MP_LOADER = mpLoader.value; B_OFFSET = 0; refreshCatalog(); });
+    if (mpVersion) {
+      mpVersion.addEventListener('change', () => { MP_VERSION = mpVersion.value; B_OFFSET = 0; refreshCatalog(); });
+      mpVersion._fill = () => {
+        if (MP_VERSIONS_FILLED || !Array.isArray(VERSION_LIST)) return;
+        MP_VERSIONS_FILLED = true;
+        const releases = VERSION_LIST.filter(v => v.type === 'release').slice(0, 60);
+        releases.forEach(v => {
+          const o = document.createElement('option');
+          o.value = v.id;
+          o.textContent = v.id;
+          mpVersion.appendChild(o);
+        });
+      };
+    }
     $('#bInstSearch').addEventListener('input', (e) => {
       clearTimeout(instSearchT);
       instSearchT = setTimeout(() => { INST_QUERY = e.target.value.trim().toLowerCase(); renderInstalled(); }, 180);
