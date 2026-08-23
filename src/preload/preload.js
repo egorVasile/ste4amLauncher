@@ -22,6 +22,8 @@ const INVOKE = [
   'builds:create',
   'builds:delete',
   'builds:update-meta',
+  'builds:set-icon-from-url',
+  'builds:set-icon-by-name',
   'builds:install-modpack',
   'builds:installed',
   'builds:registry',
