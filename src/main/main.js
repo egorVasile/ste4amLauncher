@@ -321,6 +321,17 @@ function registerIpc() {
     emit('builds:changed', {});
     return out;
   });
+  // Перенос сборки на другую версию игры
+  global.__emitBuildsChanged = () => emit('builds:changed', {});
+  ipcMain.handle('builds:migrate', (e, opts) => new Promise((resolve, reject) => {
+    mods.migrateBuild(opts || {}, p => { try { e.sender.send('builds:migrate-progress', p); } catch (er) {} })
+      .then(resolve).catch(reject);
+  }));
+  // Объединение сборок
+  ipcMain.handle('builds:merge', (e, opts) => new Promise((resolve, reject) => {
+    mods.mergeBuilds(opts || {}, p => { try { e.sender.send('builds:merge-progress', p); } catch (er) {} })
+      .then(resolve).catch(reject);
+  }));
   ipcMain.handle('builds:install-modpack', async (e, opts) => {
     try {
       const id = await mods.installModpack(opts || {}, (fr, stage) => e.sender.send('builds:progress', { frac: fr, name: stage || 'Модпак' }));
