@@ -332,6 +332,11 @@ function registerIpc() {
     mods.mergeBuilds(opts || {}, p => { try { e.sender.send('builds:merge-progress', p); } catch (er) {} })
       .then(resolve).catch(reject);
   }));
+  // Умная диагностика: автопочинка
+  ipcMain.handle('diag:autofix', (e, opts) => new Promise((resolve, reject) => {
+    mods.diagAutofix(opts || {}, p => { try { e.sender.send('diag:autofix-progress', p); } catch (er) {} })
+      .then(resolve).catch(reject);
+  }));
   ipcMain.handle('builds:install-modpack', async (e, opts) => {
     try {
       const id = await mods.installModpack(opts || {}, (fr, stage) => e.sender.send('builds:progress', { frac: fr, name: stage || 'Модпак' }));
