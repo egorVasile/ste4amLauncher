@@ -998,7 +998,8 @@
   .b-side { flex: 0.8; display: flex; flex-direction: column; min-width: 0; gap: 12px; }
   .b-detail { flex: 1.1; display: flex; flex-direction: column; min-width: 0; gap: 12px; }
   .b-side .panel, .b-cat .panel, .b-detail .panel { padding: 12px; display: flex; flex-direction: column; min-height: 0; }
-  .b-title { font-family: var(--mc-font); font-size: 13.5px; letter-spacing: .08em; color: var(--mc-grey-2); margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .b-title { font-family: var(--mc-font); font-size: 13.5px; letter-spacing: .08em; color: var(--mc-grey-2); margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between; gap: 6px; flex-wrap: wrap; }
+  .b-title .b-new-btn { font-size: 11px; padding: 7px 10px 9px; white-space: nowrap; }
   .b-title small { font-family: var(--mc-font-body); font-size: 11px; color: var(--mc-grey-3); letter-spacing: 0; }
   .b-new-btn { background: var(--mc-green-4); box-shadow: inset 0 -4px 0 var(--mc-green-6), inset 1px 1px 0 0 hsla(0,0%,100%,.25); border: 2px solid var(--mc-off-black); color: var(--mc-on-green); font-family: var(--mc-font); font-size: 12.5px; letter-spacing: .06em; padding: 8px 14px 10px; cursor: pointer; transition: all .12s; }
   .b-new-btn:hover { transform: translateY(-2px); background: var(--mc-green-3); }
@@ -1016,6 +1017,8 @@
   .bd-head { display: flex; align-items: center; gap: 14px; }
   .bd-head img { width: 64px; height: 64px; image-rendering: pixelated; background: var(--mc-grey-6); border: 2px solid var(--mc-off-black); flex-shrink: 0; box-shadow: inset 2px 2px 0 0 hsla(0,0%,100%,.2); }
   .bd-head .bd-body { flex: 1; min-width: 0; }
+  .bd-head .bd-actions { display: flex; flex-direction: column; gap: 6px; align-self: flex-start; }
+  .bd-head .bd-actions .b-mini { padding: 7px 12px; white-space: nowrap; }
   .bd-head .bd-name { font-family: var(--mc-font); font-size: 22px; letter-spacing: .04em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .bd-head .b-meta { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
   .bd-btns { display: flex; gap: 8px; margin-top: 14px; }
@@ -1233,7 +1236,7 @@
         <div class="builds-grid">
           <div class="b-side">
             <div class="panel" style="flex:1;min-height:0">
-              <div class="b-title">МОИ СБОРКИ <button class="b-new-btn" id="bNewBtn">+ СОЗДАТЬ СБОРКУ</button> <button class="b-new-btn" id="bMergeBtn" title="Объединить две и более сборок в одну" style="background:var(--mc-blue,#2b6cb0)">&#128279; ОБЪЕДИНИТЬ</button></div>
+              <div class="b-title">МОИ СБОРКИ <span style="display:flex;gap:6px"><button class="b-new-btn" id="bNewBtn">+ СОЗДАТЬ</button> <button class="b-new-btn" id="bMergeBtn" title="Объединить две и более сборок в одну" style="background:var(--mc-blue,#2b6cb0);box-shadow:inset 0 -4px 0 rgba(0,0,0,.35);color:#fff">&#128279; ОБЪЕДИНИТЬ</button></span></div>
               <div class="b-list" id="bList"></div>
             </div>
           </div>
