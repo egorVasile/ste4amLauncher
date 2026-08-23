@@ -19,6 +19,7 @@
   let APP_VERSION = '';
   const WHATSNEW_URL = 'https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/whatsnew.json';
   const NEWS_NOTES = {
+    '3.0.9': "3.0.9 — перенос и объединение сборок.\n\n1) ПЕРЕНОС СБОРКИ\nКнопка «⇄ Перенести» в сборке: выбери новую версию Minecraft — лаунчер проверит каждый мод, найдёт его версию под новую игру и создаст новую сборку (старая останется). Миры и настройки переносятся по галочке. Моды, которых нет под новую версию, будут перечислены в конце.\n\n2) ОБЪЕДИНЕНИЕ СБОРКИ\nКнопка «🔗 Объединить»: выбери две или более сборок — из их модов соберётся новая. Повторяющиеся моды покажем списком — реши, что оставить. Конфиги и ресурспаки — по галочке.\n\n3) Читаемые названия модов во всех списках вместо ID.",
     '3.0.8': "3.0.8 — улучшенная диагностика.\n\nУмная диагностика крашей теперь распознаёт больше типов ошибок:\n— повреждённые нативные библиотеки (lwjgl.dll и др.) с подсказкой решения;\n— краши модов при старте (Sodium и др.).\n\nЛожные срабатывания при успешном запуске по-прежнему исключены.",
     '3.0.7': "3.0.7 — критическое исправление запуска сборок.\n\nИсправлена ошибка «Failed to locate library: lwjgl.dll» (краш всех сборок на старте, ошибка Sodium при запуске).\n\nПричина: нативные библиотеки (lwjgl.dll и др.) терялись при подготовке сборки. Теперь:\n— нативные библиотеки больше не пропадают;\n— DLL распаковываются всегда в правильное место, независимо от структуры скачанного файла;\n— все библиотеки проверяются по контрольной сумме — битые перекачиваются автоматически.\n\nЕсли сборка всё ещё не запускается — удалите её и создайте заново.",
     '3.0.6': "3.0.6 — исправление обновления.\n\nИсправлен краш «Cannot find module debuglog» после обновления до 3.0.5: в список обновления добавлен пропущенный файл, а лаунчер теперь устойчив к неполным обновлениям (не падает и может самообновиться).\n\nВсе функции 3.0.5 на месте: запуск Forge/NeoForge с модами, фильтры модпаков, автоиконки, файловые логи.",
@@ -1325,6 +1326,8 @@
         <button class="b-mini play" id="bdPlay">&#9654; ИГРАТЬ</button>
         <button class="b-mini" id="bdExport">&#128463; ЭКСПОРТ</button>
         <button class="b-mini" id="bdImport">&#128462; ИМПОРТ</button>
+        <button class="b-mini" id="bdMigrate" title="Перенести сборку на другую версию Minecraft">&#8646; ПЕРЕНЕСТИ</button>
+        <button class="b-mini" id="bdMerge" title="Объединить сборки">&#128279; ОБЪЕДИНИТЬ</button>
         <button class="b-mini del" id="bdDel">&#10005; УДАЛИТЬ</button>
       </div>`;
     const bdImg = box.querySelector('.bd-head img');
@@ -1339,6 +1342,10 @@
     syncPlayButtons();
     const be = $('#bdEdit');
     if (be) be.addEventListener('click', () => openEditBuildModal(b));
+    const bm = $('#bdMigrate');
+    if (bm) bm.addEventListener('click', () => openMigrateModal(b));
+    const bg = $('#bdMerge');
+    if (bg) bg.addEventListener('click', openMergeModal);
     $('#bdExport').addEventListener('click', handleExport);
     $('#bdImport').addEventListener('click', handleImport);
     $('#bdDel').addEventListener('click', () => {
@@ -1426,6 +1433,246 @@
         });
       });
     });
+  }
+
+  // ===== ПЕРЕНОС СБОРКИ на другую версию Minecraft =====
+  function openMigrateModal(b) {
+    const releases = (Array.isArray(VERSION_LIST) ? VERSION_LIST : []).filter(v => v.type === 'release').slice(0, 60);
+    openModal('ПЕРЕНОС СБОРКИ', `
+      <div class="mig-head">
+        <img src="${ic(b.icon || 'Grass.png')}" alt=""/>
+        <div>
+          <div class="mig-t">${escapeHtml(b.name)}</div>
+          <div class="mig-s">Сейчас: ${escapeHtml(b.gameVersion)} &middot; ${escapeHtml(b.loader)} &middot; ${b.modCount || 0} модов</div>
+        </div>
+      </div>
+      <div style="font-family:var(--mc-font-body);font-size:11.5px;color:var(--mc-grey-2);line-height:1.55;margin-bottom:10px">
+        Будет создана <b>новая сборка</b> под выбранную версию — текущая останется нетронутой.
+        Лаунчер проверит каждый мод и найдёт его версию под новую игру. Моды, которых нет — будут перечислены в конце.
+      </div>
+      <div class="set-row"><div class="s-label">ЦЕЛЕВАЯ ВЕРСИЯ MINECRAFT</div>
+        <select id="migVersion" style="background:var(--mc-grey-5);border:2px solid var(--mc-off-black);color:var(--mc-off-white);padding:8px 9px;font-family:var(--mc-font);font-size:12px;outline:none;width:220px">
+          ${releases.map(v => `<option value="${escapeHtml(v.id)}"${v.id === b.gameVersion ? ' selected' : ''}>${escapeHtml(v.id)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="set-row"><div class="s-label">МИРЫ И НАСТРОЙКИ</div><div class="s-desc">Перенести сохранения, конфиги и ресурспаки</div>
+        <input type="checkbox" id="migData" checked style="width:18px;height:18px;accent-color:var(--mc-green)"/>
+      </div>
+      <button class="play-btn" id="migGo" style="width:100%;margin-top:10px;font-size:14px">ПОДТВЕРДИТЬ ПЕРЕНОС</button>
+    `, false, () => {
+      const go = $('#migGo');
+      if (go) go.addEventListener('click', () => {
+        const tv = $('#migVersion').value;
+        const wd = $('#migData').checked;
+        modal.classList.remove('show');
+        runMigrate(b, tv, wd);
+      });
+    });
+  }
+
+  function runMigrate(b, targetVersion, withData) {
+    openModal('ПЕРЕНОС СБОРКИ', `
+      <div class="mig-prog">
+        <div class="mp-lbl">АНАЛИЗ МОДОВ</div>
+        <div class="lp-bar alt"><div class="fill" id="migA" style="width:0%"></div></div>
+        <div class="mp-lbl">ОБЩИЙ ПРОГРЕСС</div>
+        <div class="lp-bar"><div class="fill" id="migO" style="width:0%"></div></div>
+        <div id="migStage" style="font-family:var(--mc-font-body);font-size:10.5px;color:var(--mc-grey-3);margin-top:8px">Подготовка...</div>
+      </div>
+    `, true);
+    const off = api.on('builds:migrate-progress', p => {
+      const a = $('#migA'), o = $('#migO'), s = $('#migStage');
+      if (a) a.style.width = Math.round((p.analysis || 0) * 100) + '%';
+      if (o) o.style.width = Math.round((p.overall || 0) * 100) + '%';
+      if (s && p.stage) s.textContent = p.stage;
+    });
+    api.invoke('builds:migrate', { buildId: b.id, targetVersion, withData })
+      .then(res => {
+        off();
+        modal.classList.remove('show');
+        refreshBuilds();
+        const miss = res.missing || [];
+        // ID модов -> человекочитаемые названия
+        const ids = [...new Set(miss)].filter(x => !/\.(jar|zip)$/i.test(x));
+        api.invoke('modrinth:batch-projects', ids).then(projs => {
+          const T = {};
+          (projs || []).forEach(pp => { if (pp && pp.id) T[pp.id] = pp.title || pp.slug; });
+          const nm = x => T[x] || x;
+          openModal('ПЕРЕНОС ЗАВЕРШЁН', `
+          <div style="font-family:var(--mc-font-body);font-size:12px;line-height:1.6;color:var(--mc-grey-2)">
+            ${res.moved} из ${res.total} модов перенесены на ${escapeHtml(targetVersion)}.
+            ${miss.length ? `<div style="margin-top:10px;color:#f0b90b;font-weight:600">Не нашлись под эту версию (${miss.length}):</div>
+            <div style="max-height:180px;overflow:auto;background:var(--mc-grey-5);border-radius:4px;padding:8px;margin-top:6px;font-size:11px">${miss.map(m2 => '• ' + escapeHtml(nm(m2))).join('<br/>')}</div>` : '<div style="margin-top:8px;color:var(--mc-green)">Все моды нашлись! 🎉</div>'}
+          </div>
+          <button class="play-btn" id="migDone" style="width:100%;margin-top:12px;font-size:14px">ГОТОВО</button>
+        `, false, () => {
+            const d = $('#migDone');
+            if (d) d.addEventListener('click', () => modal.classList.remove('show'));
+          });
+        }).catch(() => {
+          openModal('ПЕРЕНОС ЗАВЕРШЁН', `<div style="font-family:var(--mc-font-body);font-size:12px;color:var(--mc-grey-2)">${res.moved} из ${res.total} модов перенесены.</div>
+            <button class="play-btn" id="migDone" style="width:100%;margin-top:12px">ГОТОВО</button>`, false, () => {
+            const d = $('#migDone');
+            if (d) d.addEventListener('click', () => modal.classList.remove('show'));
+          });
+        });
+      })
+      .catch(err => {
+        off();
+        modal.classList.remove('show');
+        openModal('Ошибка переноса', `<div style="color:#ca3636;font-family:var(--mc-font-body);font-size:12px">${escapeHtml(err.message || String(err))}</div>
+          <button class="secondary-btn" id="migErr" style="width:100%;margin-top:10px">ОК</button>`, false, () => {
+          const x = $('#migErr');
+          if (x) x.addEventListener('click', () => modal.classList.remove('show'));
+        });
+      });
+  }
+
+  // ===== ОБЪЕДИНЕНИЕ СБОРОК =====
+  function openMergeModal() {
+    if (BUILD_LIST.length < 2) { mcToast('НУЖНО МИНИМУМ ДВЕ СБОРКИ'); return; }
+    const releases = (Array.isArray(VERSION_LIST) ? VERSION_LIST : []).filter(v => v.type === 'release').slice(0, 60);
+    openModal('ОБЪЕДИНЕНИЕ СБОРКИ', `
+      <div style="font-family:var(--mc-font-body);font-size:11.5px;color:var(--mc-grey-2);line-height:1.55;margin-bottom:10px">
+        Выберите <b>две или более</b> сборок — из их модов будет создана новая сборка.
+        Загрузчик берётся от первой выбранной. Повторяющиеся моды покажем в конце.
+      </div>
+      <div id="mrgList" style="display:flex;flex-direction:column;gap:6px;max-height:200px;overflow:auto;margin-bottom:10px">
+        ${BUILD_LIST.map((b, i) => `
+          <label style="display:flex;align-items:center;gap:10px;background:var(--mc-grey-5);border:2px solid var(--mc-off-black);border-radius:4px;padding:8px 10px;cursor:pointer">
+            <input type="checkbox" class="mrgChk" data-bid="${escapeHtml(b.id)}" data-gv="${escapeHtml(b.gameVersion)}" data-ld="${escapeHtml(b.loader)}" style="width:16px;height:16px;accent-color:var(--mc-green)"/>
+            <img src="${ic(b.icon || 'Grass.png')}" style="width:26px;height:26px;image-rendering:pixelated;border-radius:3px" alt=""/>
+            <span style="font-family:var(--mc-font-body);font-size:11.5px;color:var(--mc-off-white);flex:1">${escapeHtml(b.name)}</span>
+            <span class="b-tag green">${escapeHtml(b.gameVersion)}</span>
+            <span class="b-tag">${escapeHtml(b.loader)}</span>
+          </label>`).join('')}
+      </div>
+      <div id="mrgWarn" style="display:none;font-family:var(--mc-font-body);font-size:11px;color:#f0b90b;background:rgba(240,185,11,.08);border:1px dashed rgba(240,185,11,.5);border-radius:4px;padding:7px 10px;margin-bottom:10px"></div>
+      <div class="set-row"><div class="s-label">ОБЪЕДИНИТЬ ПОД ВЕРСИЮ</div>
+        <select id="mrgVersion" style="background:var(--mc-grey-5);border:2px solid var(--mc-off-black);color:var(--mc-off-white);padding:8px 9px;font-family:var(--mc-font);font-size:12px;outline:none;width:200px">
+          ${releases.map(v => `<option value="${escapeHtml(v.id)}">${escapeHtml(v.id)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="set-row"><div class="s-label">НАЗВАНИЕ</div>
+        <input id="mrgName" placeholder="Моя объединённая сборка" maxlength="48" style="background:var(--mc-grey-5);border:2px solid var(--mc-off-black);color:var(--mc-off-white);padding:7px 10px;font-family:var(--mc-font);font-size:12px;outline:none;width:200px"/>
+      </div>
+      <div class="set-row"><div class="s-label">КОНФИГИ И РЕСУРСПАКИ</div><div class="s-desc">Из первой выбранной сборки</div>
+        <input type="checkbox" id="mrgConfigs" style="width:18px;height:18px;accent-color:var(--mc-green)"/>
+      </div>
+      <button class="play-btn" id="mrgGo" style="width:100%;margin-top:10px;font-size:14px">ОБЪЕДИНИТЬ</button>
+    `, false, () => {
+      const warn = $('#mrgWarn');
+      const checkWarn = () => {
+        const sel = Array.from(document.querySelectorAll('.mrgChk:checked'));
+        const gvs = [...new Set(sel.map(c => c.dataset.gv))];
+        if (warn) {
+          warn.style.display = gvs.length > 1 ? 'block' : 'none';
+          if (gvs.length > 1) warn.textContent = 'У выбранных сборок разные версии игры (' + gvs.join(', ') + '). Постараемся найти моды под выбранную вами версию.';
+        }
+      };
+      document.querySelectorAll('.mrgChk').forEach(c => c.addEventListener('change', checkWarn));
+      const go = $('#mrgGo');
+      if (go) go.addEventListener('click', () => {
+        const sel = Array.from(document.querySelectorAll('.mrgChk:checked')).map(c => c.dataset.bid);
+        if (sel.length < 2) { mcToast('ВЫБЕРИТЕ МИНИМУМ ДВЕ СБОРКИ'); return; }
+        const tv = $('#mrgVersion').value;
+        const nm = $('#mrgName').value.trim();
+        const cfg = $('#mrgConfigs').checked;
+        modal.classList.remove('show');
+        runMerge(sel, tv, cfg, nm);
+      });
+    });
+  }
+
+  function runMerge(buildIds, targetVersion, withConfigs, name) {
+    openModal('ОБЪЕДИНЕНИЕ СБОРКИ', `
+      <div class="mig-prog">
+        <div class="mp-lbl">АНАЛИЗ МОДОВ</div>
+        <div class="lp-bar alt"><div class="fill" id="mrgA" style="width:0%"></div></div>
+        <div class="mp-lbl">ОБЩИЙ ПРОГРЕСС</div>
+        <div class="lp-bar"><div class="fill" id="mrgO" style="width:0%"></div></div>
+        <div id="mrgStage" style="font-family:var(--mc-font-body);font-size:10.5px;color:var(--mc-grey-3);margin-top:8px">Подготовка...</div>
+      </div>
+    `, true);
+    const off = api.on('builds:merge-progress', p => {
+      const a = $('#mrgA'), o = $('#mrgO'), s = $('#mrgStage');
+      if (a) a.style.width = Math.round((p.analysis || 0) * 100) + '%';
+      if (o) o.style.width = Math.round((p.overall || 0) * 100) + '%';
+      if (s && p.stage) s.textContent = p.stage;
+    });
+    api.invoke('builds:merge', { buildIds, targetVersion, withConfigs, name })
+      .then(res => {
+        off();
+        modal.classList.remove('show');
+        refreshBuilds();
+        const dups = res.duplicates || [];
+        const miss = res.missing || [];
+        // ID модов -> человекочитаемые названия
+        const allIds = [...new Set([...dups, ...miss])].filter(x => !/\.(jar|zip)$/i.test(x));
+        api.invoke('modrinth:batch-projects', allIds).then(projs => {
+          const T = {};
+          (projs || []).forEach(pp => { if (pp && pp.id) T[pp.id] = pp.title || pp.slug; });
+          const nm = x => T[x] || x;
+          const dupsHtml = dups.length ? `
+          <div style="margin-top:10px;color:#f0b90b;font-weight:600;font-family:var(--mc-font-body);font-size:11.5px">Повторяющиеся моды (были в нескольких сборках). Галочка = оставить в сборке:</div>
+          <div style="max-height:160px;overflow:auto;background:var(--mc-grey-5);border-radius:4px;padding:8px;margin-top:6px;display:flex;flex-direction:column;gap:4px">
+            ${dups.map(d => `<label style="display:flex;gap:8px;align-items:center;font-family:var(--mc-font-body);font-size:11px;color:var(--mc-off-white)"><input type="checkbox" class="dupChk" data-slug="${escapeHtml(d)}" checked style="accent-color:var(--mc-green)"/> ${escapeHtml(nm(d))}</label>`).join('')}
+          </div>` : '';
+          openModal('ОБЪЕДИНЕНИЕ ЗАВЕРШЕНО', `
+          <div style="font-family:var(--mc-font-body);font-size:12px;line-height:1.6;color:var(--mc-grey-2)">
+            Установлено ${res.total - miss.length} модов под ${escapeHtml(targetVersion)}.
+            ${dupsHtml}
+            ${miss.length ? `<div style="margin-top:10px;color:#f0b90b;font-weight:600">Не нашлись под эту версию (${miss.length}):</div>
+            <div style="max-height:120px;overflow:auto;background:var(--mc-grey-5);border-radius:4px;padding:8px;margin-top:6px;font-size:11px">${miss.map(m2 => '• ' + escapeHtml(nm(m2))).join('<br/>')}</div>` : ''}
+          </div>
+          <div style="display:flex;gap:8px;margin-top:12px">
+            ${dups.length ? '<button class="secondary-btn" id="mrgCancelAll" style="margin:0;flex:1;color:#ca3636">ОТМЕНИТЬ ОБЪЕДИНЕНИЕ</button>' : ''}
+            <button class="play-btn" id="mrgDone" style="margin:0;flex:1;font-size:14px">ГОТОВО</button>
+          </div>
+        `, false, () => {
+            const done = $('#mrgDone');
+            const cancel = $('#mrgCancelAll');
+            if (done) done.addEventListener('click', () => {
+              // снять галочку = удалить мод из объединённой сборки
+              const rm = Array.from(document.querySelectorAll('.dupChk:not(:checked)')).map(c => c.dataset.slug);
+              modal.classList.remove('show');
+              if (rm.length) {
+                (async () => {
+                  let inst = null;
+                  try { inst = await api.invoke('builds:installed', res.buildId); } catch (e) {}
+                  const files = (inst && inst.files) || inst || [];
+                  for (const s of rm) {
+                    const entry = files.find(x => x.slug === s);
+                    if (entry && entry.filename) {
+                      try { await api.invoke('builds:delete-mod', res.buildId, entry.filename, 'mod'); } catch (e) {}
+                    }
+                  }
+                  refreshBuilds();
+                })();
+              }
+            });
+            if (cancel) cancel.addEventListener('click', () => {
+              modal.classList.remove('show');
+              api.invoke('builds:delete', res.buildId).then(() => { refreshBuilds(); mcToast('ОБЪЕДИНЕНИЕ ОТМЕНЕНО'); }).catch(() => {});
+            });
+          });
+        }).catch(() => {
+          openModal('ОБЪЕДИНЕНИЕ ЗАВЕРШЕНО', `<div style="font-family:var(--mc-font-body);font-size:12px;color:var(--mc-grey-2)">Готово. Установлено ${res.total - miss.length} модов.</div>
+            <button class="play-btn" id="mrgDone" style="width:100%;margin-top:12px">ГОТОВО</button>`, false, () => {
+            const d = $('#mrgDone');
+            if (d) d.addEventListener('click', () => modal.classList.remove('show'));
+          });
+        });
+      })
+      .catch(err => {
+        off();
+        modal.classList.remove('show');
+        openModal('Ошибка объединения', `<div style="color:#ca3636;font-family:var(--mc-font-body);font-size:12px">${escapeHtml(err.message || String(err))}</div>
+          <button class="secondary-btn" id="mrgErr" style="width:100%;margin-top:10px">ОК</button>`, false, () => {
+          const x = $('#mrgErr');
+          if (x) x.addEventListener('click', () => modal.classList.remove('show'));
+        });
+      });
   }
 
   function renderInstalled() {
@@ -2368,6 +2615,8 @@
   if ($('#bNewBtn')) {
     let instSearchT = null;
     $('#bNewBtn').addEventListener('click', openCreateModal);
+    const mb = $('#bMergeBtn');
+    if (mb) mb.addEventListener('click', openMergeModal);
     $('#bSearchBtn').addEventListener('click', () => { B_OFFSET = 0; refreshCatalog(); });
     // Фильтры модпаков: загрузчик + версия игры
     const mpLoader = $('#mpLoader');
