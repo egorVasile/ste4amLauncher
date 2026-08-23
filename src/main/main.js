@@ -11,6 +11,10 @@ const store = require('./store');
 const launcher = require('./launcher');
 const mods = require('./mods');
 const updater = require('./update');
+const { dlog, logfile } = require('./debuglog');
+
+process.on('uncaughtException', (e) => { dlog('[НЕПЕРЕХВАЧЕННАЯ ОШИБКА]', e && e.stack || String(e)); });
+process.on('unhandledRejection', (e) => { dlog('[НЕОБРАБОТАННЫЙ PROMISE]', (e && e.stack) || String(e)); });
 
 function raisePriority(pid) {
   if (!pid) return;
@@ -194,6 +198,7 @@ function registerIpc() {
   ipcMain.handle('launch:start', async (_e, opts) => {
     const { version, username, ram } = opts || {};
     if (!version || typeof version !== 'string') throw new Error('Bad version');
+    dlog('>>> launch:start | version:', version, '| buildId:', (opts && opts.buildId) || '-');
     store.set('username', typeof username === 'string' ? username : store.get('username'));
     const safeRam = Math.max(1, Math.min(Number.isFinite(ram) ? ram : store.get('ram'), maxRamGb()));
     store.set('ram', safeRam);
@@ -219,6 +224,7 @@ function registerIpc() {
         const build = (await mods.loadBuilds()).find(b => b.id === opts.buildId);
         if (build) await mods.ensureBuildVersion(build);
       } catch (e) {
+        dlog('[ОШИБКА автодоводки]', e && e.message, '\n', e && e.stack || '');
         console.error('[ensure-version]', e && e.message);
       }
     }
@@ -296,6 +302,18 @@ function registerIpc() {
   });
   ipcMain.handle('builds:update-meta', async (_e, id, meta) => {
     const out = await mods.updateBuildMeta(id, meta || {});
+    emit('builds:changed', {});
+    return out;
+  });
+  // Иконка сборки из URL (обложка мода при установке)
+  ipcMain.handle('builds:set-icon-from-url', async (_e, a) => {
+    const out = await mods.setIconFromUrl((a && a.buildId) || '', (a && a.url) || '');
+    emit('builds:changed', {});
+    return out;
+  });
+  // Иконка сборки по названию: ищем модпак с тем же именем в каталоге
+  ipcMain.handle('builds:set-icon-by-name', async (_e, a) => {
+    const out = await mods.setIconFromName((a && a.buildId) || '', (a && a.name) || '');
     emit('builds:changed', {});
     return out;
   });
