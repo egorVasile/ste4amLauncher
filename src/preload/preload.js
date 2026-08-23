@@ -26,6 +26,7 @@ const INVOKE = [
   'builds:set-icon-by-name',
   'builds:migrate',
   'builds:merge',
+  'diag:autofix',
   'builds:install-modpack',
   'builds:installed',
   'builds:registry',
