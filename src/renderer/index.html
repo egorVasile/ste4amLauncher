@@ -1049,6 +1049,19 @@
   .b-mp-filters.hidden { display: none; }
   .b-mp-sel { flex: 1; background: var(--mc-grey-5); border: 2px solid var(--mc-off-black); color: var(--mc-off-white); padding: 8px 9px; font-family: var(--mc-font); font-size: 12px; outline: none; cursor: pointer; }
   .b-mp-sel:focus { border-color: var(--mc-green); }
+  /* Перенос сборки: градиентная шапка с бегущим чёрным глоу справа налево */
+  .mig-head { position: relative; overflow: hidden; border-radius: 6px; padding: 14px 16px; margin-bottom: 12px; display: flex; align-items: center; gap: 12px; background: linear-gradient(90deg, var(--mc-green-2, #3fae4a) 0%, #123c18 55%, #050805 100%); }
+  .mig-head img { width: 44px; height: 44px; image-rendering: pixelated; border-radius: 4px; z-index: 1; }
+  .mig-head .mig-t { font-family: var(--mc-font); font-size: 15px; color: #fff; letter-spacing: .08em; z-index: 1; text-shadow: 0 2px 0 rgba(0,0,0,.5); }
+  .mig-head .mig-s { font-family: var(--mc-font-body); font-size: 11px; color: rgba(255,255,255,.75); z-index: 1; }
+  .mig-head::after { content: ''; position: absolute; top: 0; right: -45%; width: 45%; height: 100%; background: linear-gradient(90deg, transparent, rgba(0,0,0,.65), transparent); animation: migGlow 2.4s linear infinite; pointer-events: none; }
+  @keyframes migGlow { from { right: -45%; } to { right: 105%; } }
+  /* Два ползунка прогресса */
+  .mig-prog { margin: 6px 0 10px; }
+  .mig-prog .mp-lbl { font-family: var(--mc-font); font-size: 10px; color: var(--mc-grey-3); letter-spacing: .08em; margin: 8px 0 4px; }
+  .lp-bar { height: 14px; background: var(--mc-grey-5); border: 2px solid var(--mc-off-black); border-radius: 3px; overflow: hidden; }
+  .lp-bar .fill { height: 100%; background: var(--mc-green); width: 0%; transition: width .2s; }
+  .lp-bar.alt .fill { background: #f0b90b; }
   .b-search { display: flex; gap: 8px; margin-bottom: 10px; }
   .b-search input { flex: 1; background: var(--mc-grey-5); border: 2px solid var(--mc-off-black); color: var(--mc-off-white); padding: 9px 11px; font-family: var(--mc-font); font-size: 13.5px; outline: none; }
   .b-search input:focus { border-color: var(--mc-green-4); }
@@ -1220,7 +1233,7 @@
         <div class="builds-grid">
           <div class="b-side">
             <div class="panel" style="flex:1;min-height:0">
-              <div class="b-title">МОИ СБОРКИ <button class="b-new-btn" id="bNewBtn">+ СОЗДАТЬ СБОРКУ</button></div>
+              <div class="b-title">МОИ СБОРКИ <button class="b-new-btn" id="bNewBtn">+ СОЗДАТЬ СБОРКУ</button> <button class="b-new-btn" id="bMergeBtn" title="Объединить две и более сборок в одну" style="background:var(--mc-blue,#2b6cb0)">&#128279; ОБЪЕДИНИТЬ</button></div>
               <div class="b-list" id="bList"></div>
             </div>
           </div>
