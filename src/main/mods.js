@@ -2078,13 +2078,87 @@ function emitChanged() {
   try { const { ipcMain } = require('electron'); if (global.__emitBuildsChanged) global.__emitBuildsChanged(); } catch (e) {}
 }
 
+// УМНАЯ ДИАГНОСТИКА: автопочинка по отчёту (без удаления модов без согласия)
+async function diagAutofix({ buildId, problems }, onProgress) {
+  const actions = [];
+  const needConsent = [];
+  const report = (stage, frac) => onProgress && onProgress({ stage: stage || '', frac: frac || 0 });
+  const list = (problems || []);
+  let step = 0;
+  const total = Math.max(1, list.length);
+
+  for (const p of list) {
+    step++;
+    report('Шаг ' + step + '/' + list.length + ': ' + (p.title || ''), (step - 1) / total);
+
+    // 1. Повреждённые нативы: чистим кэш нативов и битые jars
+    if (p.kind === 'natives' && buildId) {
+      try {
+        const nd = path.join(ROOT, 'versions', buildId, 'natives');
+        if (fs.existsSync(nd)) { fs.rmSync(nd, { recursive: true, force: true }); actions.push('Очищен кэш нативных библиотек'); }
+        let del = 0;
+        try {
+          const scan = (d) => {
+            for (const f of fs.readdirSync(d)) {
+              const pp = path.join(d, f);
+              let st; try { st = fs.statSync(pp); } catch (e) { continue; }
+              if (st.isDirectory()) scan(pp);
+              else if (f.indexOf('natives-windows') > -1) { fs.unlinkSync(pp); del++; }
+            }
+          };
+          scan(path.join(ROOT, 'libraries'));
+        } catch (e) {}
+        if (del) actions.push('Удалено повреждённых библиотек: ' + del + ' (перекачаются при запуске)');
+      } catch (e) {}
+    }
+
+    // 2. Java: скачать нужную версию и прописать путь
+    if (p.kind === 'no_java' && p.javaMajor) {
+      try {
+        report('Скачивание Java ' + p.javaMajor + '...', (step - 0.5) / total);
+        const exe = await ensureJavaRuntime(p.javaMajor, fr => report('Скачивание Java ' + p.javaMajor + '...', (step - 1 + fr * 0.8) / total));
+        store.set('javaPath', exe);
+        actions.push('Установлена Java ' + p.javaMajor + ' и указана в настройках');
+      } catch (e) { actions.push('Не удалось установить Java ' + p.javaMajor + ': ' + (e && e.message)); }
+    }
+
+    // 3. Конфликт модов: доустановить зависимости; "ломает" — только с согласия
+    if (p.kind === 'mod_conflict' && buildId) {
+      const builds = await loadBuilds();
+      const b = builds.find(x => x.id === buildId);
+      if (b) {
+        for (const d of (p.installDeps || [])) {
+          try {
+            report('Установка зависимости ' + d.dep + '...', (step - 0.5) / total);
+            const hit = await findVersionForMod(d.dep, b.gameVersion, b.loader);
+            if (hit) {
+              const dest = path.join(modsDir(buildId), hit.file.filename);
+              if (!fs.existsSync(dest)) await downloadFile(hit.file.url, dest);
+              await recordInstalled(buildId, 'mod', [{ projectId: d.dep, filename: hit.file.filename }]);
+              actions.push('Установлена зависимость: ' + d.dep);
+            } else {
+              actions.push('Зависимость ' + d.dep + ': нет версии под ' + b.gameVersion + ' / ' + b.loader);
+            }
+          } catch (e) { actions.push('Зависимость ' + d.dep + ': ошибка — ' + (e && e.message)); }
+        }
+        for (const c of (p.conflicts || [])) {
+          needConsent.push({ slug: c.mod, breaks: c.breaks });
+        }
+      }
+    }
+  }
+  report('Готово', 1);
+  emitChanged();
+  return { ok: true, actions, needConsent };
+}
+
 module.exports = {
   setRoot,
   mrSearch, mrProject, mrProjectVersions, mrVersion, mrCategories, mrLoaders, mrGameVersions,
   mrBatchProjects, mrBatchVersions,
   buildsList, buildCreate, deleteBuild, installedMods, installProject, deleteMod,
   updateBuildMeta, ensureBuildVersion, setIconFromUrl, setIconFromName,
-  migrateBuild, mergeBuilds,
+  migrateBuild, mergeBuilds, diagAutofix,
   loadInstalled,
   exportBuild, importBuild, importMrpack, findModrinthByHash, packConfigs, unpackConfigs,
   installModpack,
