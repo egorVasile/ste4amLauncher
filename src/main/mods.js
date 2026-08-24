@@ -982,7 +982,11 @@ async function installProject({ buildId, project, versionId, withDeps, type = 'm
       continue;
     }
     await downloadFile(f.url, dest, fr => onProgress && onProgress(fr));
-    installed.push({ projectId: item.projectId, filename: f.filename, size: f.size });
+    // версия и источник: для экспорта сборки и синхронизации между лаунчерами
+    installed.push({
+      projectId: item.projectId, filename: f.filename, size: f.size,
+      version: item.version.version_number, versionId: item.version.id, source: 'modrinth'
+    });
   }
   // Сохраняем название (slug) проекта в реестр сборки — при экспорте берём отсюда
   await recordInstalled(buildId, type, installed);
@@ -1318,7 +1322,13 @@ async function recordInstalled(buildId, type, installed) {
       if (!slug) continue;
       // заменяем запись с тем же типом и slug (идемпотентно)
       reg.files = reg.files.filter(x => !(x.type === type && x.slug === slug));
-      reg.files.push({ type, slug, filename: item.filename });
+      const entry = { type, slug, filename: item.filename };
+      // версия и источник: нужны для экспорта и синхронизации сборок
+      if (item.version) entry.version = item.version;
+      if (item.versionId) entry.versionId = item.versionId;
+      if (item.source) entry.source = item.source;
+      if (item.ref) entry.ref = item.ref;
+      reg.files.push(entry);
     }
     await saveInstalled(buildId, reg);
   } catch (e) {}
@@ -1354,7 +1364,7 @@ async function exportBuild(buildId) {
   const registry = await loadInstalled(buildId);
   const regByKey = new Map();
   for (const r of registry.files || []) {
-    regByKey.set(r.type + '|' + r.filename, r.slug);
+    regByKey.set(r.type + '|' + r.filename, r);
   }
 
   for (const [type, dir] of Object.entries(typeDirs)) {
@@ -1366,8 +1376,9 @@ async function exportBuild(buildId) {
         if (!['.jar', '.zip'].includes(ext)) continue;
         const fpath = path.join(dir, e.name);
 
-        // 1) ПРИОРИТЕТ: название из реестра (запомнено при скачивании)
-        let slug = regByKey.get(type + '|' + e.name) || null;
+        // 1) ПРИОРИТЕТ: данные из реестра (запомнено при скачивании)
+        const regEntry = regByKey.get(type + '|' + e.name) || null;
+        let slug = regEntry ? regEntry.slug : null;
 
         // 2) Файлы вне реестра (добавлены вручную) — старый путь: хэш/название
         if (!slug) {
@@ -1398,19 +1409,21 @@ async function exportBuild(buildId) {
         }
 
         if (slug) {
-          // Запоминаем НАЗВАНИЕ (slug проекта), а не файл/версию.
-          // versionId намеренно НЕ сохраняем: при импорте ищется по имени
-          // и Modrinth сам подберёт версию под целевую сборку.
-          files.push({
-            type,
-            slug,
-            filename: e.name
-          });
+          // slug + версия + источник: при импорте и синхронизации скачается
+          // ИМЕННО ТА ЖЕ версия из ТОГО ЖЕ каталога (Modrinth или CurseForge)
+          const out = { type, slug, filename: e.name };
+          if (regEntry) {
+            if (regEntry.version) out.version = regEntry.version;
+            if (regEntry.versionId) out.versionId = regEntry.versionId;
+            if (regEntry.source) out.source = regEntry.source;
+            if (regEntry.ref) out.ref = regEntry.ref;
+          }
+          files.push(out);
           // Пишем название обратно в реестр, если его там ещё не было —
           // чтобы следующий экспорт брал его из реестра мгновенно.
           if (!regByKey.has(type + '|' + e.name)) {
             await recordInstalled(buildId, type, [{ projectId: slug, filename: e.name }]);
-            regByKey.set(type + '|' + e.name, slug);
+            regByKey.set(type + '|' + e.name, { slug });
           }
         } else {
           skipped.push(e.name);
@@ -1479,18 +1492,40 @@ async function importBuild(manifest, onProgress) {
     done++;
     if (onProgress) onProgress(done / total, f.filename);
     try {
-      // Ищем мод по НАЗВАНИЮ (f.slug = имя проекта), а не по файлу/версии.
-      // versionId не передаём — Modrinth сам подберёт версию под эту сборку (gameVersion + loader).
-      await installProject({
-        buildId: id,
-        project: f.slug,
-        versionId: null,
-        withDeps: false,
-        type: f.type,
-        onProgress: null
-      });
+      if (f.source === 'curseforge' && f.ref && f.ref.modId != null && f.ref.fileId != null) {
+        // CurseForge: качаем ровно тот файл, что был в сборке
+        const isMod = f.type === 'mod';
+        const dir = isMod ? modsDir(id) : packsDir(id, f.type);
+        await fsp.mkdir(dir, { recursive: true });
+        const meta = await cfFileMeta(f.ref.modId, f.ref.fileId);
+        const dest = path.join(dir, meta.fileName);
+        if (!fs.existsSync(dest)) await downloadFile(meta.downloadUrl, dest);
+        await recordInstalled(id, f.type, [{
+          projectId: 'cf' + f.ref.modId, filename: meta.fileName,
+          version: meta.displayName || meta.fileName, source: 'curseforge',
+          ref: { modId: Number(f.ref.modId), fileId: Number(f.ref.fileId) }
+        }]);
+      } else {
+        // Modrinth: известна версия — ставим её; нет — подберём по названию
+        await installProject({
+          buildId: id,
+          project: f.slug,
+          versionId: f.versionId || null,
+          withDeps: false,
+          type: f.type,
+          onProgress: null
+        });
+      }
     } catch (e) {
-      log('import file error', f.slug, f.filename, e.message);
+      log('import file error', f.slug || f.filename, e.message);
+      // точная версия не встала — фолбэк на подбор по названию (только Modrinth)
+      if (f.source !== 'curseforge' && f.slug) {
+        try {
+          await installProject({ buildId: id, project: f.slug, versionId: null, withDeps: false, type: f.type, onProgress: null });
+        } catch (e2) {
+          log('import fallback error', f.slug, e2.message);
+        }
+      }
     }
   }
 
@@ -2242,7 +2277,7 @@ async function cfInstallMod({ buildId, modId, fileId, withDeps }, onProgress) {
   const file = await cfFileMeta(modId, fileId);
   const dest = path.join(dir, file.fileName);
   if (!fs.existsSync(dest)) await downloadFile(file.downloadUrl, dest, p => onProgress && onProgress(p));
-  const installed = [{ projectId: 'cf' + modId, filename: file.fileName }];
+  const installed = [{ projectId: 'cf' + modId, filename: file.fileName, version: file.displayName || file.fileName, source: 'curseforge', ref: { modId: Number(modId), fileId: Number(file.id) } }];
   let count = 1;
   if (withDeps) {
     for (const depId of (file.dependencies || []).map(d => String(d.modId))) {
@@ -2263,7 +2298,7 @@ async function cfInstallMod({ buildId, modId, fileId, withDeps }, onProgress) {
         const dmeta = await cfFileMeta(depId, match.fileId);
         const ddest = path.join(dir, dmeta.fileName);
         if (!fs.existsSync(ddest)) await downloadFile(dmeta.downloadUrl, ddest);
-        installed.push({ projectId: 'cf' + depId, filename: dmeta.fileName });
+        installed.push({ projectId: 'cf' + depId, filename: dmeta.fileName, version: dmeta.displayName || dmeta.fileName, source: 'curseforge', ref: { modId: Number(depId), fileId: Number(match.fileId) } });
         count++;
       } catch (e) { log('cf dep fail', depId, e && e.message); }
     }

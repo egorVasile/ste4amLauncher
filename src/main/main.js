@@ -11,6 +11,7 @@ const store = require('./store');
 const launcher = require('./launcher');
 const mods = require('./mods');
 const updater = require('./update');
+const party = require('./party');
 // Защита от неполного обновления: если debuglog.js не скачался,
 // лаунчер всё равно запустится (без файлового лога) и сможет самообновиться
 let dlog = () => {};
@@ -580,11 +581,42 @@ ipcMain.handle('update:status', () => updater.lastUpdateStatus());
       return { ok: false, error: e.message };
     }
   });
+
+  /* ============ Совместная сборка по сети ============ */
+  ipcMain.handle('party:create', (_e, opts) => party.create({
+    name: opts && opts.name, buildId: opts && opts.buildId, user: store.get('username'),
+    review: opts && opts.review
+  }));
+  ipcMain.handle('party:join', (_e, opts) => party.join({
+    roomId: opts && opts.roomId, ip: opts && opts.ip, buildId: opts && opts.buildId, user: store.get('username')
+  }));
+  ipcMain.handle('party:leave', () => { party.leave(); return true; });
+  ipcMain.handle('party:rooms', () => { party.discoverNow(); return party.roomsList(); });
+  ipcMain.handle('party:answer', (_e, o) => { party.answer({ reqId: o && o.reqId, ok: !!(o && o.ok) }); return true; });
+  ipcMain.handle('party:del-answer', (_e, o) => { party.delAnswer({ reqId: o && o.reqId, ok: !!(o && o.ok) }); return true; });
+  ipcMain.handle('party:report-add', (_e, file) => party.reportAdd(file || {}));
+  ipcMain.handle('party:del-req', (_e, file) => party.delReq(file || {}));
+  ipcMain.handle('party:done', () => party.done());
+  ipcMain.handle('party:start', () => party.startBuilding());
+  ipcMain.handle('party:finalize', () => { party.finalize(); return true; });
+  ipcMain.handle('party:vote', (_e, o) => party.vote(o && o.reqId, !!(o && o.yes)));
+  ipcMain.handle('party:vote-start', (_e, file) => party.voteStartReq(file || {}));
+  ipcMain.handle('party:chat', (_e, o) => party.chat(o && o.text));
+  ipcMain.handle('party:kick', (_e, o) => party.kick(o && o.user));
+  ipcMain.handle('party:report', (_e, o) => party.report(o && o.user, store.get('username')));
+  ipcMain.handle('party:rep-vote', (_e, o) => party.repVote(o && o.reqId, !!(o && o.yes)));
+  ipcMain.handle('party:pending-clear', () => { party.clearPendingFile(); return true; });
+  ipcMain.handle('party:status', () => party.status());
 }
 
 app.whenReady().then(() => {
   registerIpc();
   createWindow();
+  // Совместная сборка: UDP-сеть комнат; события → в интерфейс.
+  // Временный файл пендding-модов лежит в userData.
+  let pendingPath = '';
+  try { pendingPath = path.join(app.getPath('userData'), 'party-pending.json'); } catch (e) {}
+  party.start((ch, payload) => emit(ch, payload), store.get('username'), pendingPath);
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

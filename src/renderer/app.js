@@ -228,6 +228,7 @@
       const panel = $('#tab-' + btn.dataset.tab);
       if (panel) panel.classList.add('active');
       if (btn.dataset.tab === 'favs') renderFavs();
+      if (btn.dataset.tab === 'party') renderPartyTab();
       if (btn.dataset.tab === 'versions' && !VERSIONS_RENDERED) {
         VERSIONS_RENDERED = true;
         renderVersions();
@@ -1831,7 +1832,7 @@ let CATALOG_SRC = localStorage.getItem('catalog_src') || 'modrinth';
             <div class="b-mod-img"><img src="${modThumb(m.filename)}" alt="" loading="lazy" decoding="async" onerror="this.style.display='none'"></div>
             <div class="b-mod-content">
               <div class="bm-name" title="${filenameEsc}">${filenameEsc}</div>
-              <div class="bm-size">${mb} MB</div>
+              <div class="bm-size">${/^cf\d+$/.test(m.slug || '') ? '<span style="color:#e8862c">CF</span> · ' : (m.slug ? '<span style="color:#5fbf4a">MR</span> · ' : '')}${mb} MB</div>
             </div>
             <button class="bm-x" data-f="${filenameEsc}">&#10005;</button>
           </div>`;
@@ -2685,6 +2686,8 @@ let CATALOG_SRC = localStorage.getItem('catalog_src') || 'modrinth';
 
   function installNow(h, versionId, withDeps) {
     if (!CURRENT_BUILD) return;
+    if (!partyCanInstall()) return;
+    modal.classList.remove('show'); // страница мода закрывается — установка видна в статусе
     setStatus('УСТАНОВКА: ' + h.title.toUpperCase(), 'busy');
     updateProgress({ name: h.title, frac: 0 });
     api.invoke('builds:install-mod', { buildId: CURRENT_BUILD.id, project: h.slug, versionId, withDeps, type: itemType(h) })
@@ -2704,6 +2707,8 @@ let CATALOG_SRC = localStorage.getItem('catalog_src') || 'modrinth';
   // Установка мода из CurseForge в текущую сборку (+ опционально зависимости)
   function installCfNow(h, fileId, withDeps) {
     if (!CURRENT_BUILD || !h || h.modId == null) return;
+    if (!partyCanInstall()) return;
+    modal.classList.remove('show'); // страница мода закрывается — установка видна в статусе
     setStatus('УСТАНОВКА: ' + h.title.toUpperCase(), 'busy');
     updateProgress({ name: h.title, frac: 0 });
     api.invoke('builds:install-cf-mod', { buildId: CURRENT_BUILD.id, modId: h.modId, fileId: fileId, withDeps: !!withDeps })
@@ -2880,6 +2885,707 @@ let CATALOG_SRC = localStorage.getItem('catalog_src') || 'modrinth';
     api.on('mod:progress', (p) => updateProgress(p));
     api.on('builds:progress', (p) => updateProgress(p));
   }
+
+  /* ===== Совместная сборка по сети (комнаты, чат, голосования) ===== */
+  const PARTY_FACES = [':)', ':(', ':D', ':3', ';)', 'xD', ':P', '^_^', 'O_o', ';3'];
+  function partyFace() { return PARTY_FACES[Math.floor(Math.random() * PARTY_FACES.length)]; }
+  let PARTY = { connected: false, mode: null, room: null, buildId: null, user: '', phase: 'off', done: false, doneUsers: [], members: [], chat: [], installs: [], cooldownUntil: 0 };
+
+  (function partyCss() {
+    const st = document.createElement('style');
+    st.textContent = `
+#partyNotes{position:fixed;top:14px;right:14px;z-index:10000;display:flex;flex-direction:column;gap:8px;width:340px;pointer-events:none}
+.pn{pointer-events:auto;background:var(--mc-grey-4,#1b1b1b);border:2px solid var(--mc-off-black);border-left:4px solid var(--mc-green-2,#3c8527);padding:10px 12px;font-family:var(--mc-font-body);font-size:11.5px;color:var(--mc-off-white,#fff);box-shadow:0 8px 22px rgba(0,0,0,.5);animation:pnIn .22s ease;max-width:340px}
+.pn.act{border-left-color:#f0b90b}
+.pn .pn-t{font-family:var(--mc-font);font-size:12px;line-height:1.45;word-break:break-word}
+.pn .pn-btns{display:flex;gap:6px;margin-top:8px}
+.pn .pn-btns .b-mini{flex:1;margin:0}
+.pn .pn-bar{height:3px;background:rgba(255,255,255,.14);margin-top:8px;border-radius:2px;overflow:hidden}
+.pn .pn-bar i{display:block;height:100%;width:100%;background:#f0b90b}
+.pn.out{opacity:0;transform:translateX(24px);transition:all .25s ease}
+@keyframes pnIn{from{transform:translateX(28px);opacity:0}to{transform:none;opacity:1}}
+#partyFlash{position:fixed;inset:0;z-index:9998;pointer-events:none;background:#3c8527;opacity:0}
+#partyFlash.go{animation:pFlash .9s ease}
+@keyframes pFlash{0%{opacity:0}25%{opacity:.45}100%{opacity:0}}
+#partyHud{position:fixed;inset:0;z-index:9000;pointer-events:none;display:none}
+#partyHud>*{pointer-events:auto}
+.ph-chat{position:absolute;top:12px;left:112px;width:300px;display:flex;flex-direction:column;gap:5px;background:rgba(20,20,20,.93);border:2px solid var(--mc-off-black);padding:8px}
+.ph-chat.min .p-chat-list,.ph-chat.min .p-chat-in,.ph-chat.min .p-chat-send{display:none}
+.ph-chat-head{display:flex;align-items:center;justify-content:space-between;gap:6px}
+.ph-chat-head .mp-vtitle{margin:0}
+.ph-min{cursor:pointer;font-family:var(--mc-font);font-size:11px;color:var(--mc-grey-2);padding:2px 8px;border:1px solid var(--mc-grey-4);user-select:none}
+.ph-min:hover{color:var(--mc-off-white);border-color:var(--mc-grey-2)}
+.ph-players{position:absolute;bottom:14px;left:112px;display:flex;flex-direction:column;gap:6px;max-width:300px}
+.p-chat-list{overflow-y:auto;background:var(--mc-grey-5,#111);border:2px solid var(--mc-off-black);padding:6px 8px;font-family:var(--mc-font-body);font-size:11px;color:var(--mc-grey-1);display:flex;flex-direction:column;gap:3px}
+.p-chat-list b{color:var(--mc-green-2,#5fbf4a)}
+.ph-banner{font-family:var(--mc-font);font-size:12px;border:1px dashed;padding:6px 14px;border-radius:6px;background:var(--mc-grey-4,#1b1b1b)}
+.p-done-zone{position:fixed;bottom:0;left:50%;transform:translateX(-50%);z-index:9001;pointer-events:auto;padding:6px 34px 8px;cursor:pointer}
+.p-done-zone::after{content:'';display:block;width:42px;height:4px;border-radius:3px;background:rgba(255,255,255,.35)}
+.p-done-wrap{position:fixed;bottom:40px;left:50%;transform:translateX(-50%);opacity:0;pointer-events:none;transition:opacity .18s ease}
+.p-done-zone:hover .p-done-wrap{opacity:1;pointer-events:auto}
+#pChat{height:150px;overflow-y:auto;background:var(--mc-grey-5,#111);border:2px solid var(--mc-off-black);padding:6px 8px;font-family:var(--mc-font-body);font-size:11px;color:var(--mc-grey-1);display:flex;flex-direction:column;gap:3px}
+#pChat b{color:var(--mc-green-2,#5fbf4a)}`;
+    document.head.appendChild(st);
+    const notes = document.createElement('div'); notes.id = 'partyNotes'; document.body.appendChild(notes);
+    const fl = document.createElement('div'); fl.id = 'partyFlash'; document.body.appendChild(fl);
+  })();
+
+  function partyNotify(text, opts) {
+    opts = opts || {};
+    const box = document.getElementById('partyNotes');
+    if (!box) return;
+    const el = document.createElement('div');
+    el.className = 'pn' + (opts.actions ? ' act' : '');
+    el.innerHTML = '<div class="pn-t">' + escapeHtml(text) + '</div>';
+    let closed = false;
+    const close = (via) => {
+      if (closed) return;
+      closed = true;
+      clearInterval(tick);
+      el.classList.add('out');
+      setTimeout(() => el.remove(), 260);
+      if (via === 'timeout' && opts.onTimeout) opts.onTimeout();
+    };
+    if (opts.actions) {
+      const btns = document.createElement('div'); btns.className = 'pn-btns';
+      opts.actions.forEach(a => {
+        const b = document.createElement('button');
+        b.className = 'b-mini play'; b.textContent = a.label;
+        b.addEventListener('click', () => { close('btn'); a.cb(); });
+        btns.appendChild(b);
+      });
+      el.appendChild(btns);
+    }
+    const bar = document.createElement('div'); bar.className = 'pn-bar'; bar.innerHTML = '<i></i>';
+    el.appendChild(bar);
+    box.appendChild(el);
+    const total = opts.timeout || (opts.actions ? 10000 : 5000);
+    const fill = bar.firstChild;
+    const t0 = Date.now();
+    const tick = setInterval(() => {
+      fill.style.width = Math.max(0, (1 - (Date.now() - t0) / total) * 100) + '%';
+    }, 100);
+    setTimeout(() => close('timeout'), total);
+  }
+
+  function partyFlashGreen() {
+    const fl = document.getElementById('partyFlash');
+    if (!fl) return;
+    fl.classList.remove('go'); void fl.offsetWidth; fl.classList.add('go');
+  }
+
+  function partyTypeWord(t) {
+    return ({ mod: 'мод', resourcepack: 'ресурспак', shaderpack: 'шейдер(ы)', datapack: 'датапак' })[t] || 'файл';
+  }
+
+  function partyResetLocal() {
+    PARTY = { connected: false, mode: null, room: null, buildId: null, user: PARTY.user, phase: 'off', done: false, doneUsers: [], members: [], chat: [], installs: [], cooldownUntil: 0 };
+  }
+
+  function partyCanInstall() {
+    if (PARTY.connected && PARTY.phase === 'review') {
+      mcToast('ИДЁТ ПРОВЕРКА: ДОБАВЛЯТЬ НЕЛЬЗЯ — ТОЛЬКО УДАЛЯТЬ', true);
+      return false;
+    }
+    if (!PARTY.connected) return true;
+    const now = Date.now();
+    if (now < PARTY.cooldownUntil) {
+      mcToast('КУЛДАУН: ' + Math.ceil((PARTY.cooldownUntil - now) / 1000) + ' С', true);
+      return false;
+    }
+    PARTY.installs = PARTY.installs.filter(t => now - t < 1000);
+    PARTY.installs.push(now);
+    if (PARTY.installs.length >= 3) {
+      PARTY.cooldownUntil = now + 3000;
+      PARTY.installs = [];
+      mcToast('СЛИШКОМ БЫСТРО! ПАУЗА 3 СЕК', true);
+      return false;
+    }
+    return true;
+  }
+
+  function partyReportAdd(h, extra) {
+    if (!PARTY.connected) return;
+    const file = {
+      filename: (extra && extra.filename) || ((h.title || 'mod') + '.jar'),
+      type: itemType(h),
+      title: h.title || h.filename,
+      source: h.source || 'modrinth',
+      ref: (h.source === 'curseforge')
+        ? { modId: h.modId, fileId: extra && extra.fileId }
+        : { slug: h.slug, versionId: extra && extra.versionId }
+    };
+    api.invoke('party:report-add', file).catch(() => {});
+  }
+
+  async function partySyncDownload(file) {
+    if (!PARTY.connected || !PARTY.buildId) return;
+    try {
+      if (file.source === 'curseforge' && file.ref && file.ref.modId != null && file.ref.fileId != null) {
+        await api.invoke('builds:install-cf-mod', { buildId: PARTY.buildId, modId: file.ref.modId, fileId: file.ref.fileId, withDeps: false });
+      } else if (file.ref && file.ref.slug) {
+        await api.invoke('builds:install-mod', { buildId: PARTY.buildId, project: file.ref.slug, versionId: file.ref.versionId || null, withDeps: false, type: file.type });
+      } else return;
+      refreshBuilds();
+    } catch (e) {
+      partyNotify('НЕ СКАЧАЛОСЬ: ' + (file.title || file.filename), { timeout: 6000 });
+    }
+  }
+
+  async function partySyncAll(files) {
+    if (!PARTY.connected || !PARTY.buildId) return;
+    const have = new Set();
+    for (const t of ['mod', 'resourcepack', 'shaderpack']) {
+      try {
+        const lst = await api.invoke('builds:installed', PARTY.buildId, t);
+        (lst || []).forEach(x => have.add(t + '|' + x.filename));
+      } catch (e) {}
+    }
+    const missing = (files || []).filter(f => !have.has(f.type + '|' + f.filename));
+    if (missing.length) partyNotify('СКАЧИВАЮ СБОРКУ: ' + missing.length + ' файл(ов)...');
+    // качаем из ТЕХ ЖЕ источников, откуда брали участники (тег source в списке)
+    for (const f of missing) await partySyncDownload(f);
+    refreshBuilds();
+    api.invoke('party:pending-clear').catch(() => {});
+    if (missing.length) mcToast('СОВМЕСТНАЯ СБОРКА СИНХРОНИЗИРОВАНА');
+  }
+
+  function partyMembersHtml() {
+    const rows = [];
+    const meDone = PARTY.done;
+    rows.push('<div class="b-mod" style="padding:6px 10px' + (meDone ? ';border-color:#3c8527;background:rgba(60,133,39,.2)' : '') + '"><div class="bm-name"' + (meDone ? ' style="color:#5fbf4a"' : '') + '>' + escapeHtml(PARTY.user || 'Вы') + ' (вы)' + (meDone ? ' \u2714' : '') + '</div></div>');
+    for (const m of PARTY.members) {
+      if (m === PARTY.user) continue;
+      const done = PARTY.doneUsers.includes(m);
+      rows.push(`<div class="b-mod" style="padding:6px 10px${done ? ';border-color:#3c8527;background:rgba(60,133,39,.2)' : ''}">
+        <div style="display:flex;align-items:center;gap:6px;flex:1;min-width:0">
+          <div class="bm-name"${done ? ' style="color:#5fbf4a"' : ''}>${escapeHtml(m)}${done ? ' \u2714' : ''}</div>
+        </div>
+        <button class="bm-x pRep" data-u="${escapeHtml(m)}" title="Жалоба: голосование на выгон">&#9888;</button>
+        ${PARTY.mode === 'host' ? `<button class="bm-x pKick" data-u="${escapeHtml(m)}" title="Исключить (хост)">&#10005;</button>` : ''}
+      </div>`);
+    }
+    return rows.join('');
+  }
+
+  function partyReportConfirm(user) {
+    openModal('Жалоба на игрока', `
+      <div style="font-family:var(--mc-font-body);font-size:12px;line-height:1.6;color:var(--mc-grey-2)">
+        Накинуть жалобу на <b style="color:var(--mc-off-white)">${escapeHtml(user)}</b>?<br/>
+        Если большинство проголосует за — игрока выгонят из комнаты даже без участия хоста.
+        При равенстве голосов он останется.
+      </div>
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button class="secondary-btn" id="prNo" style="margin:0;flex:1">ОТМЕНА</button>
+        <button class="play-btn" id="prYes" style="margin:0;flex:1;font-size:14px">ЖАЛОБА</button>
+      </div>`, false, () => {
+      const n = $('#prNo');
+      if (n) n.addEventListener('click', () => modal.classList.remove('show'));
+      const y = $('#prYes');
+      if (y) y.addEventListener('click', () => {
+        modal.classList.remove('show');
+        api.invoke('party:report', { user }).then(r => {
+          if (r && r.error === 'no-user') mcToast('ИГРОК УЖЕ ВЫШЕЛ ИЗ КОМНАТЫ', true);
+        }).catch(() => {});
+      });
+    });
+  }
+
+  function partyRenderMembers() {
+    document.querySelectorAll('.p-members-box').forEach(box => {
+      box.innerHTML = partyMembersHtml();
+      box.querySelectorAll('.pKick').forEach(b => b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        api.invoke('party:kick', { user: b.dataset.u }).catch(() => {});
+      }));
+      box.querySelectorAll('.pRep').forEach(b => b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        partyReportConfirm(b.dataset.u);
+      }));
+    });
+    // счётчик в HUD
+    const hud = document.getElementById('partyHud');
+    if (hud && PARTY.connected) {
+      const cnt = hud.querySelector('.ph-players .mp-vtitle');
+      if (cnt) cnt.textContent = 'ИГРОКОВ: ' + (PARTY.members.length + 1);
+    }
+  }
+
+  // Плавающий HUD поверх любой вкладки: чат, игроки, «Закончил», «Завершить»
+  function renderPartyHud() {
+    let hud = document.getElementById('partyHud');
+    if (!hud) { hud = document.createElement('div'); hud.id = 'partyHud'; document.body.appendChild(hud); }
+    const active = PARTY.connected && (PARTY.phase === 'building' || PARTY.phase === 'review' || PARTY.phase === 'final');
+    if (!active) { hud.style.display = 'none'; hud.innerHTML = ''; return; }
+    hud.style.display = 'block';
+    const hostBtn = (PARTY.mode === 'host' && PARTY.phase === 'building')
+      ? '<button class="b-new-btn" id="pHudRev" style="background:#e8862c" title="Перейти к проверке">ЗАВЕРШИТЬ</button>' : '';
+    const banner = PARTY.phase === 'review'
+      ? '<div class="ph-banner" style="color:#f0b90b;border-color:rgba(240,185,11,.5)">ИДЁТ ПРОВЕРКА — ДОБАВЛЯТЬ НЕЛЬЗЯ, ТОЛЬКО УДАЛЯТЬ</div>'
+      : (PARTY.phase === 'final'
+        ? '<div class="ph-banner" style="color:#5fbf4a;border-color:rgba(95,191,74,.5)">СБОРКА ЗАВЕРШЕНА — РАЗДАЁМ ФАЙЛЫ...</div>'
+        : '<span class="b-tag" style="font-size:11px">' + escapeHtml(PARTY.room ? PARTY.room.name : '') + '</span>');
+    const doneZone = (PARTY.phase === 'building' && !PARTY.done)
+      ? '<div class="p-done-zone"><div class="p-done-wrap"><button class="play-btn" id="pHudDone" style="font-size:15px;padding:11px 26px">\u2714 ЗАКОНЧИЛ</button></div></div>' : '';
+    const chatBody = PARTY.chatMin ? '' : `
+      <div class="p-chat-list" style="height:30vh">${partyChatHtml() || '<div style="color:var(--mc-grey-3)">Сообщений пока нет</div>'}</div>
+      <div style="display:flex;gap:6px">
+        <input type="text" class="p-chat-in" placeholder="написать..." maxlength="300" style="flex:1;background:var(--mc-grey-5);border:2px solid var(--mc-off-black);color:var(--mc-off-white);padding:5px 8px;font-family:var(--mc-font-body);font-size:11px;outline:none"/>
+        <button class="b-mini play p-chat-send" style="margin:0;width:40px">&#9654;</button>
+      </div>`;
+    hud.innerHTML = `
+      <div class="ph-chat${PARTY.chatMin ? ' min' : ''}">
+        <div class="ph-chat-head">
+          <div class="mp-vtitle">ЧАТ · ${escapeHtml(PARTY.room ? PARTY.room.name : '')}</div>
+          <div class="ph-min" title="${PARTY.chatMin ? 'Развернуть' : 'Свернуть'}">${PARTY.chatMin ? '\u25A1' : '\u2014'}</div>
+        </div>
+        ${chatBody}
+      </div>
+      <div class="ph-players">
+        <div class="mp-vtitle">ИГРОКОВ: ${PARTY.members.length + 1}</div>
+        <div class="p-members-box" style="display:flex;flex-direction:column;gap:4px;max-height:22vh;overflow-y:auto">${partyMembersHtml()}</div>
+      </div>
+      <div style="position:absolute;top:12px;left:50%;transform:translateX(-50%);display:flex;gap:10px;align-items:center">${hostBtn}${banner}</div>
+      ${doneZone}`;
+    partyWireChat();
+    partyRenderMembers();
+    const minBtn = hud.querySelector('.ph-min');
+    if (minBtn) minBtn.addEventListener('click', () => { PARTY.chatMin = !PARTY.chatMin; renderPartyHud(); });
+    const rb = $('#pHudRev');
+    if (rb) rb.addEventListener('click', () => api.invoke('party:finalize').catch(() => {}));
+    const db = $('#pHudDone');
+    if (db) db.addEventListener('click', async () => {
+      await api.invoke('party:done').catch(() => {});
+      PARTY.done = true;
+      partyFlashGreen();
+      renderPartyHud();
+      renderPartyTab();
+      mcToast('ГОТОВО! ОЖИДАЕМ ОСТАЛЬНЫХ');
+    });
+  }
+
+  function partyChatPush(user, text) {
+    PARTY.chat.push({ user, text });
+    if (PARTY.chat.length > 200) PARTY.chat.shift();
+    const boxes = document.querySelectorAll('.p-chat-list');
+    if (boxes.length) {
+      boxes.forEach(box => {
+        const d = document.createElement('div');
+        d.innerHTML = '<b>' + escapeHtml(user) + ':</b> ' + escapeHtml(text);
+        box.appendChild(d);
+        box.scrollTop = box.scrollHeight;
+      });
+    } else if (user !== PARTY.user) {
+      partyNotify('\uD83D\uDCAC ' + user + ': ' + text, { timeout: 4500 });
+    }
+  }
+
+  function partyChatHtml() {
+    return PARTY.chat.map(m => '<div><b>' + escapeHtml(m.user) + ':</b> ' + escapeHtml(m.text) + '</div>').join('');
+  }
+
+  function partyWireChat() {
+    document.querySelectorAll('.p-chat-list').forEach(box => { box.scrollTop = box.scrollHeight; });
+    document.querySelectorAll('.p-chat-send').forEach(cs => {
+      if (cs._wired) return;
+      cs._wired = true;
+      cs.addEventListener('click', () => {
+        const inp = cs.parentNode.querySelector('.p-chat-in');
+        const v = (inp && inp.value || '').trim();
+        if (!v) return;
+        inp.value = '';
+        api.invoke('party:chat', v).catch(() => {});
+      });
+    });
+    document.querySelectorAll('.p-chat-in').forEach(ci => {
+      if (ci._wired) return;
+      ci._wired = true;
+      ci.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter') return;
+        const v = (ci.value || '').trim();
+        if (!v) return;
+        ci.value = '';
+        api.invoke('party:chat', v).catch(() => {});
+      });
+    });
+  }
+
+  // Рендер вкладки «Вместе» под текущее состояние сети
+  function renderPartyTab() {
+    const panel = $('#partyPanel');
+    if (!panel) return;
+    if (window._pRoomsIv) { clearInterval(window._pRoomsIv); window._pRoomsIv = null; }
+
+    /* --- не подключены: создание и список комнат --- */
+    if (!PARTY.connected) {
+      const createBlock = CURRENT_BUILD ? `
+        <button class="play-btn" id="pCreateBtn" style="width:100%;margin-top:12px;font-size:15px">СОЗДАТЬ КОМНАТУ (сборка «${escapeHtml(CURRENT_BUILD.name)}»)</button>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:10px;font-family:var(--mc-font-body);font-size:11px;color:var(--mc-grey-3)">
+          <span>ТАЙМАУТ ПРОВЕРКИ (для хоста):</span>
+          <div class="switch on" id="pRevSw" style="transform:scale(.8)"></div>
+          <input type="text" id="pRevSec" inputmode="numeric" value="60" style="width:44px;background:var(--mc-grey-5);border:2px solid var(--mc-off-black);color:var(--mc-off-white);padding:4px 6px;font-family:var(--mc-font);font-size:11px;text-align:center;outline:none"/> сек
+        </div>` : `
+        <div class="b-empty" style="margin-top:12px">Сначала выберите сборку во вкладке «Сборки» — комната привязывается к ней</div>`;
+      panel.innerHTML = `
+        <div style="max-width:600px;margin:26px auto;width:100%;padding:0 16px">
+          <div class="b-title">СОВМЕСТНАЯ СБОРКА <small>LAN / Radmin</small></div>
+          <div style="font-family:var(--mc-font-body);font-size:11.5px;color:var(--mc-grey-2);line-height:1.55;margin-top:6px">
+            Собирайте модпак вместе: общая комната, чат, уведомления о каждом моде,
+            голосования за удаление. Во время сборки моды не скачиваются — весь список
+            раздаётся каждому, когда все нажмут «Закончил».
+          </div>
+          ${createBlock}
+          <div class="b-title" style="margin-top:22px">КОМНАТЫ РЯДОМ <small id="pRoomsInfo"></small></div>
+          <div id="pRooms" style="display:flex;flex-direction:column;gap:6px;max-height:260px;overflow-y:auto"></div>
+        </div>`;
+      const roomsBox = $('#pRooms');
+      const renderRooms = (rooms) => {
+        if (!roomsBox) return;
+        roomsBox.innerHTML = rooms.length ? rooms.map(r =>
+          `<div class="b-mod" style="cursor:pointer" data-rid="${escapeHtml(r.id)}" data-ip="${escapeHtml(r.ip || '')}" data-port="${r.port || ''}">
+            <div style="display:flex;align-items:center;gap:8px;min-width:0">
+              <div class="bm-name">${escapeHtml(r.name)}</div>
+              <div class="bm-size">${r.members} чел. · хост ${escapeHtml(r.hostUser)}</div>
+            </div>
+            <button class="b-mini play">ВОЙТИ</button>
+          </div>`).join('')
+          : '<div class="b-empty">Пока пусто — создайте свою, друзья её увидят</div>';
+        const info = $('#pRoomsInfo');
+        if (info) info.textContent = rooms.length ? rooms.length + ' шт.' : '';
+        roomsBox.querySelectorAll('[data-rid]').forEach(row => {
+          row.addEventListener('click', async () => {
+            if (!CURRENT_BUILD) { mcToast('СНАЧАЛА ВЫБЕРИТЕ СБОРКУ', true); return; }
+            const sec = parseInt(($('#pRevSec') || {}).value, 10) || 60;
+            await api.invoke('party:join', { roomId: row.dataset.rid, ip: row.dataset.ip, port: parseInt(row.dataset.port, 10) || null, buildId: CURRENT_BUILD.id }).catch(() => {});
+            mcToast('ЗАПРОС ОТПРАВЛЕН — ЖДЁМ ОТВЕТ ХОСТА');
+          });
+        });
+      };
+      api.invoke('party:rooms').then(renderRooms).catch(() => {});
+      window._pRoomsIv = setInterval(async () => {
+        if (!PARTY.connected) {
+          try { renderRooms((await api.invoke('party:rooms')) || []); } catch (e) {}
+        } else if (window._pRoomsIv) { clearInterval(window._pRoomsIv); window._pRoomsIv = null; }
+      }, 2000);
+      const cb = $('#pCreateBtn');
+      if (cb) cb.addEventListener('click', async () => {
+        const sec = parseInt(($('#pRevSec') || {}).value, 10) || 60;
+        let revOn = true;
+        const sw = $('#pRevSw');
+        if (sw) revOn = sw.classList.contains('on');
+        const res = await api.invoke('party:create', { name: CURRENT_BUILD.name, buildId: CURRENT_BUILD.id, review: { enabled: revOn, sec } }).catch(() => null);
+        if (!res || res.ok === false) {
+          mcToast('НА ЭТОМ ПК УЖЕ ХОСТИТ ДРУГАЯ КОМНАТА — НЕЛЬЗЯ СОЗДАТЬ ВТОРУЮ', true);
+          return;
+        }
+        PARTY.connected = true; PARTY.mode = 'host';
+        PARTY.room = { name: CURRENT_BUILD.name };
+        PARTY.buildId = CURRENT_BUILD.id;
+        PARTY.phase = 'lobby'; PARTY.done = false; PARTY.doneUsers = []; PARTY.members = [];
+        renderPartyTab();
+        mcToast('КОМНАТА ГОТОВА — ЖМИТЕ «НАЧАТЬ!»');
+      });
+      const sw = $('#pRevSw');
+      if (sw) sw.addEventListener('click', () => sw.classList.toggle('on'));
+      return;
+    }
+
+    const phaseName = { lobby: 'ЛОББИ', building: 'СБОРКА', review: 'ПРОВЕРКА', final: 'ФИНАЛ' }[PARTY.phase] || PARTY.phase;
+
+    /* --- лобби: ждём «Начать!» от хоста --- */
+    if (PARTY.phase === 'lobby') {
+      panel.innerHTML = `
+        <div style="max-width:600px;margin:26px auto;width:100%;padding:0 16px;display:flex;flex-direction:column;gap:12px">
+          <div class="b-title">КОМНАТА «${escapeHtml(PARTY.room ? PARTY.room.name : '')}» <small>${PARTY.mode === 'host' ? 'вы хост' : 'участник'} · лобби</small></div>
+          <div class="mp-vtitle">УЧАСТНИКИ (${PARTY.members.length + 1})</div>
+          <div class="p-members-box" style="display:flex;flex-direction:column;gap:5px">${partyMembersHtml()}</div>
+          ${PARTY.mode === 'host'
+            ? '<button class="play-btn" id="pStartBtn" style="width:100%;margin-top:8px;font-size:16px;padding:12px">&#9654; НАЧАТЬ!</button>'
+            : '<div class="b-empty" style="margin-top:8px">Ждём, пока хост нажмёт «Начать!»</div>'}
+          <button class="secondary-btn" id="pLeaveBtn" style="width:100%">ПОКИНУТЬ КОМНАТУ</button>
+          <div class="mp-vtitle" style="margin-top:6px">ЧАТ</div>
+          <div class="p-chat-list" id="pChat" style="height:180px">${partyChatHtml()}</div>
+          <div style="display:flex;gap:6px">
+            <input type="text" class="p-chat-in" placeholder="сообщение..." maxlength="300" style="flex:1;background:var(--mc-grey-5);border:2px solid var(--mc-off-black);color:var(--mc-off-white);padding:6px 9px;font-family:var(--mc-font-body);font-size:11.5px;outline:none"/>
+            <button class="b-mini play p-chat-send" style="margin:0;width:44px">&#9654;</button>
+          </div>
+        </div>`;
+      partyWireChat();
+      partyRenderMembers();
+      const sb = $('#pStartBtn');
+      if (sb) sb.addEventListener('click', () => api.invoke('party:start').catch(() => {}));
+      const l = $('#pLeaveBtn');
+      if (l) l.addEventListener('click', () => { api.invoke('party:leave').catch(() => {}); partyResetLocal(); renderPartyTab(); });
+      return;
+    }
+
+    /* --- сборка/проверка/финал: управление (чат и игроки плавают поверх всех вкладок) --- */
+    const reviewBtns = PARTY.phase === 'review'
+      ? '<button class="play-btn" id="pOpenRev" style="width:100%;margin-top:8px">ОТКРЫТЬ СПИСОК ФАЙЛОВ</button>' +
+        (PARTY.mode === 'host' ? '<button class="b-mini" id="pFinBtn" style="width:100%;margin-top:8px;background:#e8862c">ЗАВЕРШИТЬ СБОРКУ — РАЗДАТЬ ВСЕМ</button>' : '')
+      : '';
+    panel.innerHTML = `
+      <div style="max-width:600px;margin:26px auto;width:100%;padding:0 16px;display:flex;flex-direction:column;gap:10px">
+        <div class="b-title">КОМНАТА «${escapeHtml(PARTY.room ? PARTY.room.name : '')}» <small>${PARTY.mode === 'host' ? 'вы хост' : 'участник'} · ${escapeHtml(phaseName)}</small></div>
+        <div style="font-family:var(--mc-font-body);font-size:11.5px;color:var(--mc-grey-2);line-height:1.55">
+          ${PARTY.phase === 'building' ? 'Добавляйте моды во вкладке «Сборки» — у всех появится уведомление, файл запишется в список сборки. Чат, игроки и кнопка «Закончил» плавают поверх любого раздела.' : ''}
+          ${PARTY.phase === 'review' ? 'Идёт проверка: добавлять моды нельзя — только голосовать за удаление (крестик здесь или в «Сборках»).' : ''}
+          ${PARTY.phase === 'final' ? 'Идёт раздача: каждый докачивает файлы из тех же источников, откуда их брали участники.' : ''}
+        </div>
+        <div class="mp-vtitle">УЧАСТНИКИ (${PARTY.members.length + 1})</div>
+        <div class="p-members-box" style="display:flex;flex-direction:column;gap:5px">${partyMembersHtml()}</div>
+        ${reviewBtns}
+        ${PARTY.phase === 'building' && !PARTY.done ? '<div class="b-empty">Наведите на полоску внизу по центру экрана — появится кнопка «Закончил»</div>' : ''}
+        <button class="secondary-btn" id="pLeaveBtn" style="width:100%">ПОКИНУТЬ КОМНАТУ</button>
+        <div class="mp-vtitle" style="margin-top:6px">ЧАТ</div>
+        <div class="p-chat-list" id="pChat" style="height:170px">${partyChatHtml()}</div>
+        <div style="display:flex;gap:6px">
+          <input type="text" class="p-chat-in" placeholder="сообщение..." maxlength="300" style="flex:1;background:var(--mc-grey-5);border:2px solid var(--mc-off-black);color:var(--mc-off-white);padding:6px 9px;font-family:var(--mc-font-body);font-size:11.5px;outline:none"/>
+          <button class="b-mini play p-chat-send" style="margin:0;width:44px">&#9654;</button>
+        </div>
+      </div>`;
+    partyWireChat();
+    partyRenderMembers();
+    const l = $('#pLeaveBtn');
+    if (l) l.addEventListener('click', () => { api.invoke('party:leave').catch(() => {}); partyResetLocal(); renderPartyTab(); });
+    const or = $('#pOpenRev');
+    if (or) or.addEventListener('click', () => partyOpenReview(PARTY.reviewFiles || []));
+    const fb = $('#pFinBtn');
+    if (fb) fb.addEventListener('click', () => api.invoke('party:finalize').catch(() => {}));
+  }
+
+  // фаза проверки: список файлов с крестиками → голосование
+  function partyOpenReview(files) {
+    PARTY.reviewFiles = files || [];
+    const groups = { mod: [], resourcepack: [], shaderpack: [], datapack: [] };
+    (files || []).forEach(f => (groups[f.type] || groups.mod).push(f));
+    const section = (title, arr) => arr.length
+      ? '<div class="mp-vtitle" style="margin-top:10px">' + title + '</div>' + arr.map(f =>
+        `<div class="b-mod" style="padding:6px 10px">
+          <div style="min-width:0">
+            <div class="bm-name">${escapeHtml(f.title || f.filename)}</div>
+            <div class="bm-meta">добавил: ${escapeHtml(f.addedByUser || '?')}</div>
+          </div>
+          <button class="bm-x" data-fn="${escapeHtml(f.filename)}" data-ft="${escapeHtml(f.type)}" title="Голосование за удаление">&#10005;</button>
+        </div>`).join('')
+      : '';
+    let html = '<div style="font-family:var(--mc-font-body);font-size:11.5px;color:var(--mc-grey-2);line-height:1.5">Сборка собрана! Проверьте файлы. Крестик — запустить <b style="color:#f0b90b">голосование</b> за удаление: большинство решает, при равенстве — ничья.</div>';
+    html += section('МОДЫ', groups.mod) + section('РЕСУРСПАКИ', groups.resourcepack) + section('ШЕЙДЕРЫ', groups.shaderpack);
+    if (PARTY.mode === 'host') html += '<button class="play-btn" id="pFinBtn" style="width:100%;margin-top:12px;font-size:14px">ЗАВЕРШИТЬ СБОРКУ — РАЗДАТЬ ВСЕМ</button>';
+    openModal('ПРОВЕРКА СБОРКИ', html, true, () => {
+      modal.querySelectorAll('.bm-x').forEach(x => x.addEventListener('click', () => partyVoteConfirm(x.dataset.fn, x.dataset.ft)));
+      const fin = $('#pFinBtn');
+      if (fin) fin.addEventListener('click', () => { api.invoke('party:finalize').catch(() => {}); modal.classList.remove('show'); });
+    });
+  }
+
+  function partyVoteConfirm(filename, type) {
+    openModal('Удаление через голосование', `
+      <div style="font-family:var(--mc-font-body);font-size:12px;line-height:1.6;color:var(--mc-grey-2)">
+        Вы хотите удалить <b style="color:var(--mc-off-white)">${escapeHtml(filename)}</b>?<br/>
+        Другие возможно не согласны! Запустить голосование насчёт удаления мода?
+      </div>
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button class="secondary-btn" id="pvNo" style="margin:0;flex:1">НЕТ</button>
+        <button class="play-btn" id="pvYes" style="margin:0;flex:1;font-size:14px">ДА, ГОЛОСОВАТЬ</button>
+      </div>`, false, () => {
+      const n = $('#pvNo');
+      if (n) n.addEventListener('click', () => modal.classList.remove('show'));
+      const y = $('#pvYes');
+      if (y) y.addEventListener('click', () => {
+        modal.classList.remove('show');
+        api.invoke('party:vote-start', { filename, type, title: filename }).catch(() => {});
+      });
+    });
+  }
+
+  async function partyDeleteFile(filename, type) {
+    const bid = (PARTY.connected && PARTY.buildId) || (CURRENT_BUILD && CURRENT_BUILD.id);
+    if (!bid) return;
+    try {
+      await api.invoke('builds:delete-mod', bid, filename, type);
+      if (CURRENT_BUILD && CURRENT_BUILD.id === bid) renderInstalled();
+    } catch (e) {}
+  }
+
+  // кнопка в шапке сборок
+  (function partyButton() {
+    const anchor = $('#bNewBtn');
+    if (!anchor) return;
+    const b = document.createElement('button');
+    b.className = 'b-new-btn';
+    b.id = 'bPartyBtn';
+    b.title = 'Совместная сборка по сети (Radmin / LAN)';
+    b.style.background = '#7a4fb0';
+    b.textContent = '\uD83D\uDC65 ВМЕСТЕ';
+    b.addEventListener('click', () => {
+      const nav = $('.nav-item[data-tab="party"]');
+      if (nav) nav.click();
+    });
+    anchor.parentNode.appendChild(b);
+  })();
+
+  /* ===== События сети → уведомления ===== */
+  api.on('party:event', (ev) => {
+    if (!ev || !ev.kind) return;
+    if (ev.kind === 'add' && ev.file) {
+      // во время сборки ничего не качаем — файл записан во временный список,
+      // все скачают при завершении (кнопка «Закончил» → проверка → финал)
+      partyNotify(ev.user + ' добавил ' + partyTypeWord(ev.file.type) + ': ' + (ev.file.title || ev.file.filename));
+    } else if (ev.kind === 'remove' && ev.file) {
+      partyNotify(ev.user + ' удалил ' + partyTypeWord(ev.file.type) + ': ' + (ev.file.title || ev.file.filename));
+      partyDeleteFile(ev.file.filename, ev.file.type);
+    } else if (ev.kind === 'join') {
+      PARTY.members = [...new Set([...PARTY.members, ev.user])];
+      partyNotify(ev.user + ' присоединился к сборке');
+      partyRenderMembers();
+    } else if (ev.kind === 'leave') {
+      PARTY.members = PARTY.members.filter(m => m !== ev.user);
+      PARTY.doneUsers = PARTY.doneUsers.filter(m => m !== ev.user);
+      partyNotify(ev.user + ' покинул сборку');
+      partyRenderMembers();
+    } else if (ev.kind === 'done') {
+      PARTY.doneUsers = [...new Set([...PARTY.doneUsers, ev.user])];
+      partyNotify(ev.user + ' завершил сборку, ожидаем только вас!');
+      partyRenderMembers();
+    } else if (ev.kind === 'chat') {
+      partyChatPush(ev.user, ev.text || '');
+    } else if (ev.kind === 'kick') {
+      PARTY.members = PARTY.members.filter(m => m !== ev.user);
+      PARTY.doneUsers = PARTY.doneUsers.filter(m => m !== ev.user);
+      partyNotify((ev.byUser || 'Хост') + ' исключил из комнаты: ' + ev.user, { timeout: 6500 });
+      partyRenderMembers();
+    } else if (ev.kind === 'rep_result') {
+      if (ev.result === 'kicked') {
+        PARTY.members = PARTY.members.filter(m => m !== ev.target);
+        PARTY.doneUsers = PARTY.doneUsers.filter(m => m !== ev.target);
+        partyNotify('По жалобам выгнали: ' + ev.target + ' (' + ev.yes + ' за / ' + ev.no + ' против)', { timeout: 6500 });
+      } else {
+        partyNotify('Жалоба на ' + ev.target + ' не прошла (' + ev.yes + ' за / ' + ev.no + ' против) — остаётся', { timeout: 6500 });
+      }
+      partyRenderMembers();
+    } else if (ev.kind === 'host-lost') {
+      partyNotify('Хост вышел из сети — комната закрылась ' + partyFace(), { timeout: 7000 });
+      partyResetLocal();
+    }
+  });
+  api.on('party:rooms', () => {});
+  api.on('party:ask', (a) => {
+    partyNotify(a.user + ' хочет войти в комнату. Пустить?', {
+      actions: [
+        { label: 'НЕТ', cb: () => api.invoke('party:answer', { reqId: a.reqId, ok: false }).catch(() => {}) },
+        { label: 'ДА', cb: () => api.invoke('party:answer', { reqId: a.reqId, ok: true }).catch(() => {}) }
+      ],
+      timeout: 10000
+    });
+  });
+  api.on('party:delAsk', (a) => {
+    partyNotify((a.byUser || 'Кто-то') + ' хотел удалить ' + partyTypeWord(a.file.type) + ' «' + (a.file.title || a.file.filename) + '», который добавили ВЫ. Вы согласны?', {
+      actions: [
+        { label: 'НЕТ', cb: () => api.invoke('party:del-answer', { reqId: a.reqId, ok: false }).catch(() => {}) },
+        { label: 'ДА', cb: () => api.invoke('party:del-answer', { reqId: a.reqId, ok: true }).catch(() => {}) }
+      ],
+      timeout: 10000
+    });
+  });
+  api.on('party:delResult', (d) => {
+    const face = partyFace();
+    if (d.result === 'ok') {
+      mcToast('УДАЛЕНИЕ СОГЛАСОВАНО');
+      partyDeleteFile(d.file.filename, d.file.type);
+    } else if (d.result === 'no') {
+      mcToast('Вам отказали в удалении «' + (d.file.title || d.file.filename) + '» ' + face, true);
+    } else {
+      partyNotify((d.byUser || 'Пользователь') + ' проигнорировал ваш запрос на удаление ' + face, { timeout: 6500 });
+    }
+  });
+  api.on('party:cooldown', (c) => {
+    PARTY.cooldownUntil = Date.now() + (c.waitMs || 3000);
+    mcToast('КУЛДАУН ОТ СЕТИ: ' + Math.ceil((c.waitMs || 3000) / 1000) + ' С', true);
+  });
+  api.on('party:joinResult', (r) => {
+    if (r.result === 'join_ok') {
+      PARTY.connected = true; PARTY.mode = 'client';
+      PARTY.phase = 'lobby'; PARTY.done = false; PARTY.doneUsers = [];
+      const nav = $('.nav-item[data-tab="party"]');
+      if (nav && !nav.classList.contains('active')) nav.click(); else renderPartyTab();
+      mcToast('ВЫ В КОМНАТЕ! ЖДИТЕ «НАЧАТЬ!» ОТ ХОСТА');
+    } else if (r.result === 'join_no') {
+      mcToast('Ваш запрос отклонили ' + partyFace(), true);
+      partyResetLocal();
+      renderPartyTab();
+      renderPartyHud();
+    } else if (r.result === 'join_timeout') {
+      mcToast('Ваш запрос проигнорировали :/', true);
+      partyResetLocal();
+      renderPartyTab();
+      renderPartyHud();
+    }
+  });
+  api.on('party:state', (st) => {
+    PARTY.members = st.peers || [];
+    partyRenderMembers();
+    partySyncAll(st.files || []);
+  });
+  api.on('party:kicked', () => {
+    partyNotify('Вас исключили из комнаты ' + partyFace(), { timeout: 7000 });
+    partyResetLocal();
+    renderPartyTab();
+    renderPartyHud();
+  });
+  api.on('party:repOpen', (v) => {
+    partyNotify('ЖАЛОБА (' + (v.byUser || '?') + '): выгнать ' + (v.target || '?') + ' из комнаты?', {
+      actions: [
+        { label: 'НЕТ', cb: () => api.invoke('party:rep-vote', { reqId: v.reqId, yes: false }).catch(() => {}) },
+        { label: 'ДА', cb: () => api.invoke('party:rep-vote', { reqId: v.reqId, yes: true }).catch(() => {}) }
+      ],
+      timeout: v.timeoutMs || 10000
+    });
+  });
+  api.on('party:closed', () => { partyResetLocal(); renderPartyTab(); renderPartyHud(); });
+  api.on('party:doneUpdate', (d) => {
+    PARTY.doneUsers = d.doneUsers || [];
+    partyRenderMembers();
+  });
+  api.on('party:phase', (p) => {
+    PARTY.phase = p.phase;
+    if (p.phase === 'review') PARTY.reviewFiles = p.files || [];
+    renderPartyTab();
+    renderPartyHud();
+    if (p.phase === 'building') {
+      // старт сборки → сразу к модам: слева список сборки, справа каталог
+      const nav = $('.nav-item[data-tab="builds"]');
+      if (nav && !nav.classList.contains('active')) nav.click();
+      mcToast('СБОРКА НАЧАЛАСЬ — ДОБАВЛЯЙТЕ МОДЫ ИЗ КАТАЛОГА');
+    }
+    if (p.phase === 'review') {
+      partyNotify('Сборка собрана! Проверяйте файлы — добавлять нельзя, только голосовать за удаление.', { timeout: 6500 });
+      partyOpenReview(p.files || []);
+    } else if (p.phase === 'final') {
+      partyNotify('Сборка завершена! Раздаю файлы всем участникам...', { timeout: 6500 });
+      partySyncAll(p.files || []);
+    }
+  });
+  api.on('party:voteOpen', (v) => {
+    partyNotify('ГОЛОСОВАНИЕ (' + (v.byUser || '?') + '): удалить «' + (v.file.title || v.file.filename) + '»?', {
+      actions: [
+        { label: 'НЕТ', cb: () => api.invoke('party:vote', { reqId: v.reqId, yes: false }).catch(() => {}) },
+        { label: 'ДА', cb: () => api.invoke('party:vote', { reqId: v.reqId, yes: true }).catch(() => {}) }
+      ],
+      timeout: v.timeoutMs || 30000
+    });
+  });
+  api.on('party:voteResult', (v) => {
+    const t = v.file ? (v.file.title || v.file.filename) : '';
+    if (v.result === 'removed') {
+      partyNotify('ГОЛОСОВАНИЕ: «' + t + '» удалён (' + v.yes + ' за / ' + v.no + ' против)', { timeout: 6500 });
+      partyDeleteFile(v.file.filename, v.file.type);
+    } else if (v.result === 'kept') {
+      partyNotify('ГОЛОСОВАНИЕ: «' + t + '» остаётся (' + v.yes + ' за / ' + v.no + ' против)', { timeout: 6500 });
+    } else {
+      partyNotify('Голоса равны, ничья. «' + t + '» остаётся.', { timeout: 6500 });
+    }
+  });
 
   /* ===== Инициализация ===== */
   // Режим «Экономия»: единый выключатель всего декоративного
