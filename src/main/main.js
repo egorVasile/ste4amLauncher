@@ -606,6 +606,7 @@ ipcMain.handle('update:status', () => updater.lastUpdateStatus());
   ipcMain.handle('party:report', (_e, o) => party.report(o && o.user, store.get('username')));
   ipcMain.handle('party:rep-vote', (_e, o) => party.repVote(o && o.reqId, !!(o && o.yes)));
   ipcMain.handle('party:pending-clear', () => { party.clearPendingFile(); return true; });
+  ipcMain.handle('party:pending-list', () => party.pendingList());
   ipcMain.handle('party:status', () => party.status());
 }
 

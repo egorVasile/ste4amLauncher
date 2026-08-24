@@ -80,6 +80,7 @@ const INVOKE = [
   'party:report',
   'party:rep-vote',
   'party:pending-clear',
+  'party:pending-list',
   'party:status',
   'dialog:saveFile',
   'dialog:openFile'

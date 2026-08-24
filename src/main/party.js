@@ -947,6 +947,15 @@ function discoverNow() {
   discover();
 }
 
+// текущий список сборки по мнению сети (хост: filesMap, гость: зеркало)
+function pendingList() {
+  const src = mode === 'host' ? Array.from(filesMap.values()) : Array.from(pendingFiles.values());
+  return src.map(f => ({
+    filename: f.filename, type: f.type, title: f.title,
+    source: f.source, addedByUser: f.addedByUser
+  }));
+}
+
 // «Я закончил» — клиент шлёт хосту, хот отмечает себя
 function done() {
   if (mode === 'client' && hostAddr) {
@@ -1013,4 +1022,4 @@ function status() {
 
 function setUser(u) { if (u) me.user = u; }
 
-module.exports = { start, stop, create, join, leave: () => stop('leave'), answer, delAnswer, reportAdd, delReq, roomsList, discoverNow, status, setUser, done, finalize, startBuilding, vote, voteStartReq, chat, kick, report, repVote, clearPendingFile, uport: () => myUport, PORT };
+module.exports = { start, stop, create, join, leave: () => stop('leave'), answer, delAnswer, reportAdd, delReq, roomsList, discoverNow, pendingList, status, setUser, done, finalize, startBuilding, vote, voteStartReq, chat, kick, report, repVote, clearPendingFile, uport: () => myUport, PORT };

@@ -1813,11 +1813,21 @@ let CATALOG_SRC = localStorage.getItem('catalog_src') || 'modrinth';
       if (cnt) cnt.textContent = '';
       return;
     }
-    api.invoke('builds:installed', CURRENT_BUILD.id, B_TYPE).then(mods => {
+    api.invoke('builds:installed', CURRENT_BUILD.id, B_TYPE).then(async mods => {
       const all = Array.isArray(mods) ? mods : [];
+      // файлы из списка совместной сборки, которых ещё нет на диске
+      let pendingOnly = [];
+      if (PARTY.connected && PARTY.buildId === CURRENT_BUILD.id && (PARTY.phase === 'building' || PARTY.phase === 'review')) {
+        try {
+          const pend = (await api.invoke('party:pending-list')) || [];
+          const localNames = new Set(all.map(m => m.filename));
+          pendingOnly = pend.filter(f => (f.type || 'mod') === B_TYPE && !localNames.has(f.filename));
+        } catch (e) {}
+      }
       const list = INST_QUERY ? all.filter(m => (m.filename || "").toLowerCase().includes(INST_QUERY)) : all;
-      if (cnt) cnt.textContent = list.length ? list.length + ' шт.' : '';
-      if (!list.length) {
+      const pendList = INST_QUERY ? pendingOnly.filter(f => ((f.title || '') + (f.filename || '')).toLowerCase().includes(INST_QUERY)) : pendingOnly;
+      if (cnt) cnt.textContent = (list.length + pendList.length) ? (list.length + pendList.length) + ' шт.' : '';
+      if (!list.length && !pendList.length) {
         box.innerHTML = '<div class="b-empty">' + (B_TYPE === 'mod' ? 'Модов нет — установите из каталога справа' : (B_TYPE === 'resourcepack' ? 'Ресурспаков нет — установите из каталога' : (B_TYPE === 'shaderpack' ? 'Шейдеров нет — установите из каталога' : 'Датапаков нет — установите из каталога'))) + '</div>';
         return;
       }
@@ -1837,15 +1847,37 @@ let CATALOG_SRC = localStorage.getItem('catalog_src') || 'modrinth';
             <button class="bm-x" data-f="${filenameEsc}">&#10005;</button>
           </div>`;
       });
+      pendList.forEach((f, i) => {
+        const delay = i < 8 ? ';animation-delay:' + (i * 0.03).toFixed(2) + 's' : '';
+        html += `
+          <div class="b-mod" data-pf="${escapeHtml(f.filename)}" data-pt="${escapeHtml(f.type || 'mod')}" style="${delay};border-style:dashed">
+            <div class="b-mod-img" style="display:flex;align-items:center;justify-content:center;font-size:17px">&#8987;</div>
+            <div class="b-mod-content">
+              <div class="bm-name" title="${escapeHtml(f.title || f.filename)}">${escapeHtml(f.title || f.filename)}</div>
+              <div class="bm-size"><span style="color:#f0b90b">БУДЕТ СКАЧАН</span> · ${f.source === 'curseforge' ? 'CF' : 'MR'} · добавил: ${escapeHtml(f.addedByUser || '?')}</div>
+            </div>
+            <button class="bm-x" data-pfx="${escapeHtml(f.filename)}" data-pt="${escapeHtml(f.type || 'mod')}">&#10005;</button>
+          </div>`;
+      });
       box.innerHTML = html;
       box.querySelectorAll('.b-mod').forEach(row => {
         const f = row.dataset.f;
+        const pf = row.dataset.pf;
         const x = row.querySelector('.bm-x');
-        if (x) x.addEventListener('click', () => {
-          api.invoke('builds:delete-mod', CURRENT_BUILD.id, f, B_TYPE).then(() => {
-            setStatus((B_TYPES.find(t => t[0] === B_TYPE) || ['', 'МОД'])[1] + ' УДАЛЁН', '');
-            renderInstalled();
-          }).catch(() => {});
+        if (x) x.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          try {
+            if (pf) { // файл из списка сети: удаление через согласование владельца
+              const pr = await api.invoke('party:del-req', { filename: pf, type: row.dataset.pt });
+              if (pr.mode === 'pending') return; // ждём вердикт (party:delResult)
+              renderInstalled();
+              return;
+            }
+            if (PARTY.connected && PARTY.phase === 'review') { partyStartVote(f); return; }
+            const pr = PARTY.connected ? await api.invoke('party:del-req', { filename: f, type: B_TYPE }) : { mode: 'free' };
+            if (pr.mode === 'pending') return; // ждём вердикт
+            await doDeleteBuildFile(f, B_TYPE);
+          } catch (err) {}
         });
         const bImg = row.querySelector('.b-mod-img img');
         if (bImg) applyEdgeAccent(bImg, row);
@@ -3437,6 +3469,40 @@ let CATALOG_SRC = localStorage.getItem('catalog_src') || 'modrinth';
     } catch (e) {}
   }
 
+  // удаление файла сборки (локально установленного)
+  async function doDeleteBuildFile(filename, type) {
+    const bid = (PARTY.connected && PARTY.buildId) || (CURRENT_BUILD && CURRENT_BUILD.id);
+    if (!bid) return;
+    try {
+      await api.invoke('builds:delete-mod', bid, filename, type);
+      if (CURRENT_BUILD && CURRENT_BUILD.id === bid) {
+        setStatus((B_TYPES.find(t => t[0] === type) || ['', 'ФАЙЛ'])[1] + ' УДАЛЁН', '');
+        renderInstalled();
+      }
+    } catch (e) {}
+  }
+
+  // запуск голосования за удаление (фаза проверки)
+  function partyStartVote(filename) {
+    openModal('Удаление через голосование', `
+      <div style="font-family:var(--mc-font-body);font-size:12px;line-height:1.6;color:var(--mc-grey-2)">
+        Вы хотите удалить <b style="color:var(--mc-off-white)">${escapeHtml(filename)}</b>?<br/>
+        Другие возможно не согласны! Запустить голосование насчёт удаления?
+      </div>
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button class="secondary-btn" id="psvNo" style="margin:0;flex:1">НЕТ</button>
+        <button class="play-btn" id="psvYes" style="margin:0;flex:1;font-size:14px">ДА, ГОЛОСОВАТЬ</button>
+      </div>`, false, () => {
+      const n = $('#psvNo');
+      if (n) n.addEventListener('click', () => modal.classList.remove('show'));
+      const y = $('#psvYes');
+      if (y) y.addEventListener('click', () => {
+        modal.classList.remove('show');
+        api.invoke('party:vote-start', { filename, type: B_TYPE, title: filename }).catch(() => {});
+      });
+    });
+  }
+
   // кнопка в шапке сборок
   (function partyButton() {
     const anchor = $('#bNewBtn');
@@ -3464,6 +3530,7 @@ let CATALOG_SRC = localStorage.getItem('catalog_src') || 'modrinth';
     } else if (ev.kind === 'remove' && ev.file) {
       partyNotify(ev.user + ' удалил ' + partyTypeWord(ev.file.type) + ': ' + (ev.file.title || ev.file.filename));
       partyDeleteFile(ev.file.filename, ev.file.type);
+      if (CURRENT_BUILD) renderInstalled();
     } else if (ev.kind === 'join') {
       PARTY.members = [...new Set([...PARTY.members, ev.user])];
       partyNotify(ev.user + ' присоединился к сборке');
