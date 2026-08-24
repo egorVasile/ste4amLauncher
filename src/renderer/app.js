@@ -608,6 +608,9 @@
       <div class="set-row"><div><div class="s-label">ЭКОНОМИЯ CPU</div><div class="s-desc" style="color:var(--mc-green-2)">Отключить декоративные анимации и дрифт фона — меньше нагрузка на процессор</div></div><div class="switch ${settingsCache.economy ? 'on' : ''}" id="swEco"></div></div>
       <div class="set-row"><div><div class="s-label">JVM-АРГУМЕНТЫ</div><div class="s-desc">Дополнительные флаги для Java (через пробел)</div></div><input type="text" id="jvmInput" value="${escapeHtml(settingsCache.jvmArgs)}" placeholder="-XX:+UseZGC ..." style="background:var(--mc-grey-5);border:2px solid var(--mc-off-black);color:var(--mc-off-white);padding:7px 10px;font-family:Consolas,monospace;font-size:12px;width:220px;outline:none"/></div>
       <div class="set-row"><div><div class="s-label">ЗЕРКАЛО</div><div class="s-desc">auto = Mojang, при ошибке BMCLAPI</div></div><div class="dropdown" style="padding:7px 12px;font-size:13px" id="mirrorDD">&#9662; ${settingsCache.mirror}</div></div>
+      <div class="set-cat">КАТАЛОГ МОДОВ</div>
+      <div class="set-row"><div><div class="s-label">ИСТОЧНИК КАТАЛОГА</div><div class="s-desc">Где искать моды, ресурспаки, шейдеры и модпаки: Modrinth или CurseForge</div></div>
+      <div class="theme-seg" id="catSeg"><button class="b-type-btn t-opt${CATALOG_SRC !== 'curseforge' ? ' sel' : ''}" data-cat="modrinth">MODRINTH</button><button class="b-type-btn t-opt${CATALOG_SRC === 'curseforge' ? ' sel' : ''}" data-cat="curseforge">CURSEFORGE</button></div></div>
       <div class="set-row"><div><div class="s-label">JAVA</div><div class="s-desc">Найденная Java при запуске</div></div><button class="dropdown" style="padding:7px 12px;font-size:13px" id="javaBtn">НАЙТИ JAVA</button></div>
       <div class="set-row"><div><div class="s-label">РАЗРЕШЕНИЕ ЭКРАНА</div><div class="s-desc">Ширина x Высота (пусто = как в игре)</div></div><div style="display:flex;align-items:center;gap:6px"><input type="text" id="resW" inputmode="numeric" placeholder="1280" value="${escapeHtml(settingsCache.width || '')}" style="width:70px;background:var(--mc-grey-5);border:2px solid var(--mc-off-black);color:var(--mc-off-white);padding:7px 6px;font-family:var(--mc-font);font-size:12px;text-align:center;outline:none"/><span style="color:var(--mc-grey-3)">x</span><input type="text" id="resH" inputmode="numeric" placeholder="720" value="${escapeHtml(settingsCache.height || '')}" style="width:70px;background:var(--mc-grey-5);border:2px solid var(--mc-off-black);color:var(--mc-off-white);padding:7px 6px;font-family:var(--mc-font);font-size:12px;text-align:center;outline:none"/></div></div>
       <div class="set-cat">ЗАПУСК</div>
@@ -676,6 +679,14 @@
       $('#mirrorDD').innerHTML = '&#9662; ' + next;
       api.invoke('settings:set', 'mirror', next);
       setStatus('ЗЕРКАЛО: ' + next.toUpperCase(), '');
+    });
+    // Источник каталога модов: Modrinth <-> CurseForge
+    const catSeg = $('#catSeg');
+    if (catSeg) catSeg.addEventListener('click', (e) => {
+      const btn = e.target.closest('.t-opt');
+      if (!btn || btn.dataset.cat === CATALOG_SRC) return;
+      setCatalogSrc(btn.dataset.cat);
+      catSeg.querySelectorAll('.t-opt').forEach(b => b.classList.toggle('sel', b.dataset.cat === CATALOG_SRC));
     });
     $('#javaBtn').addEventListener('click', () => {
       setStatus('ИЩУ JAVA...', 'busy');
@@ -1202,6 +1213,30 @@
   let MP_LOADER = '';
   let MP_VERSION = '';
   let MP_VERSIONS_FILLED = false;
+let CATALOG_SRC = localStorage.getItem('catalog_src') || 'modrinth';
+  // Источник каталога: 'modrinth' | 'curseforge'. Меняется в настройках,
+  // синхронизируется с settings.json (ключ catalogSource) и localStorage.
+  function isCf() { return CATALOG_SRC === 'curseforge'; }
+  function updateCatalogTitle() {
+    const el = document.getElementById('bCatName');
+    if (el) el.textContent = isCf() ? 'КАТАЛОГ CURSEFORGE' : 'КАТАЛОГ MODRINTH';
+  }
+  function setCatalogSrc(src, silent) {
+    src = src === 'curseforge' ? 'curseforge' : 'modrinth';
+    const changed = src !== CATALOG_SRC;
+    CATALOG_SRC = src;
+    try { localStorage.setItem('catalog_src', src); } catch (e) {}
+    api.invoke('settings:set', 'catalogSource', src).catch(() => {});
+    if (!changed) { updateCatalogTitle(); return; }
+    for (const k of Object.keys(CAT_CACHE)) delete CAT_CACHE[k]; // кэш другого источника не смешиваем
+    B_OFFSET = 0;
+    updateCatalogTitle();
+    if (!silent) {
+      refreshCatalog();
+      mcToast('КАТАЛОГ: ' + (isCf() ? 'CURSEFORGE' : 'MODRINTH'));
+      setStatus('КАТАЛОГ: ' + (isCf() ? 'CURSEFORGE' : 'MODRINTH'), '');
+    }
+  }
   let INST_QUERY = '';
   // Кэш названий/иконок модов с Modrinth (по slug) — чтобы не дёргать API на каждом рендере
   const instInfoCache = {};
@@ -1813,12 +1848,20 @@
         });
         const bImg = row.querySelector('.b-mod-img img');
         if (bImg) applyEdgeAccent(bImg, row);
-        // клик по карточке → страница мода (название/фото берём из Modrinth)
+        // клик по карточке → страница мода (название/фото из Modrinth или CurseForge)
         const slug = row.dataset.slug;
         if (slug) {
           row.classList.add('clickable');
           row.addEventListener('click', (e) => {
             if (e.target.closest('.bm-x')) return;
+            // CF-моды: slug = 'cf<modId>' из реестра
+            if (/^cf\d+$/.test(slug)) {
+              const modId = Number(slug.slice(2));
+              api.invoke('cf:project', modId).then(p => {
+                if (p) openModPage({ ...p, source: 'curseforge', modId, btype: B_TYPE });
+              }).catch(() => {});
+              return;
+            }
             const info = instInfoCache[slug];
             if (info && info.title) {
               openModPage({ slug, title: info.title, icon_url: info.icon_url || '', description: info.description || '', downloads: info.downloads || 0, categories: info.categories || [], project_type: info.project_type || '', btype: itemType({ project_type: info.project_type || '', btype: B_TYPE }) });
@@ -1844,7 +1887,10 @@
           if (INST_QUERY && info.title && !info.title.toLowerCase().includes(INST_QUERY)) row.style.display = 'none';
         };
         if (instInfoCache[slug]) { enrich(instInfoCache[slug]); return; }
-        api.invoke('modrinth:project', slug).then(enrich).catch(() => {});
+        const projP = /^cf\d+$/.test(slug)
+          ? api.invoke('cf:project', Number(slug.slice(2)))
+          : api.invoke('modrinth:project', slug);
+        projP.then(enrich).catch(() => {});
       });
     }).catch(err => {
       box.innerHTML = '<div class=\x22b-empty\x22>ERR: ' + escapeHtml((err && err.message) || String(err)) + '</div>';
@@ -1918,9 +1964,19 @@
       facets.push(['project_type:' + (B_TYPE === 'shaderpack' ? 'shader' : B_TYPE)]);
     }
     if (B_CAT) facets.push(['categories:' + B_CAT]);
-    const cacheKey = q + '|' + JSON.stringify(facets) + '|' + B_OFFSET;
+    const cacheKey = CATALOG_SRC + '|' + q + '|' + JSON.stringify(facets) + '|' + B_OFFSET;
+    // Запрос к активному каталогу: Modrinth (facets) или CurseForge (q/type/gameVersion)
+    let searchP;
+    if (isCf()) {
+      const opts = { q, type: B_TYPE, offset: B_OFFSET };
+      if (B_TYPE === 'modpack') { if (MP_VERSION) opts.gameVersion = MP_VERSION; }
+      else if (CURRENT_BUILD) opts.gameVersion = CURRENT_BUILD.gameVersion;
+      searchP = api.invoke('cf:search', opts);
+    } else {
+      searchP = api.invoke('modrinth:search', { query: q, facets, limit: 25, offset: B_OFFSET });
+    }
     const render = res => {
-      if (info && res.total_hits) info.textContent = res.total_hits + ' результатов';
+      if (info && (res.total_hits || res.total)) info.textContent = (res.total_hits || res.total) + ' результатов';
       if (!res.hits || !res.hits.length) {
         box.innerHTML = '<div class="b-empty">Ничего не найдено</div>';
         return;
@@ -1957,7 +2013,7 @@
       });
     };
     if (CAT_CACHE[cacheKey]) { render(CAT_CACHE[cacheKey]); return; }
-    api.invoke('modrinth:search', { query: q, facets, limit: 25, offset: B_OFFSET }).then(res => {
+    searchP.then(res => {
       CAT_CACHE[cacheKey] = res;
       const keys = Object.keys(CAT_CACHE);
       if (keys.length > 50) delete CAT_CACHE[keys[0]];
@@ -2048,7 +2104,10 @@
     if (!h || !v) return;
     setStatus('МОДПАК: ' + h.title.toUpperCase(), 'busy');
     updateProgress({ name: h.title, frac: 0 });
-    api.invoke('builds:install-modpack', { slug: h.slug, versionId: v.id }).then(newId => {
+    const req = (h.source === 'curseforge')
+      ? { source: 'curseforge', modId: h.modId, fileId: v.fileId != null ? v.fileId : Number(v.id), name: h.title }
+      : { slug: h.slug, versionId: v.id };
+    api.invoke('builds:install-modpack', req).then(newId => {
       hideProgress();
       setStatus('МОДПАК УСТАНОВЛЕН: ' + h.title, '');
       modal.classList.remove('show');
@@ -2102,7 +2161,7 @@
         FAVS = await api.invoke('favs:remove', h.slug);
         showToast(typeWord(h) + ' \u00ab' + h.title + '\u00bb \u0443\u0434\u0430\u043b\u0451\u043d \u0438\u0437 \u0438\u0437\u0431\u0440\u0430\u043d\u043d\u043e\u0433\u043e', true);
       } else {
-        FAVS = await api.invoke('favs:add', { slug: h.slug, title: h.title, icon_url: h.icon_url || '', description: h.description || '', categories: h.categories || [], project_type: h.project_type || '', btype: B_TYPE });
+        FAVS = await api.invoke('favs:add', { slug: h.slug, title: h.title, icon_url: h.icon_url || '', description: h.description || '', categories: h.categories || [], project_type: h.project_type || '', btype: B_TYPE, source: h.source || 'modrinth', modId: h.modId != null ? h.modId : null });
         showToast(typeWord(h) + ' \u00ab' + h.title + '\u00bb \u0441\u043e\u0445\u0440\u0430\u043d\u0451\u043d \u0443\u0441\u043f\u0435\u0448\u043d\u043e!', false);
       }
     } catch (err) {
@@ -2119,7 +2178,7 @@
   function favCard(f) {
     const row = document.createElement('div');
     row.className = 'b-hit';
-    const h = { slug: f.slug, title: f.title, icon_url: f.icon_url, description: f.description, categories: f.categories, downloads: f.downloads || 0, project_type: f.project_type || '', btype: itemType(f) };
+    const h = { slug: f.slug, title: f.title, icon_url: f.icon_url, description: f.description, categories: f.categories, downloads: f.downloads || 0, project_type: f.project_type || '', btype: itemType(f), source: f.source || 'modrinth', modId: f.modId != null ? f.modId : null };
     row.innerHTML = `
       <button class="b-fav on" data-slug="${escapeHtml(f.slug)}"></button>
       <img src="${f.icon_url || ''}" alt=""/>
@@ -2233,6 +2292,9 @@
     const loader = b.loader ? String(b.loader).toLowerCase() : null;
     const entries = [];
     for (const f of files) {
+      // CF-моды (slug = 'cf<id>') отсутствуют на Modrinth — их зависимости
+      // уже разрешены при установке; пропускаем, чтобы не ловить 404
+      if (/^cf\d+$/.test(String(f.slug || ''))) continue;
       const key = b.id + '|' + f.slug;
       if (!REQ_VER_CACHE[key]) {
         try { REQ_VER_CACHE[key] = await api.invoke('modrinth:versions', f.slug, b.gameVersion, loader); }
@@ -2291,7 +2353,14 @@
     box.innerHTML = '<div class="b-empty">\u0417\u0430\u0433\u0440\u0443\u0437\u043a\u0430...</div>';
     // МОДПАКИ: версии без привязки к сборке; пользователь выбирает версию Minecraft и загрузчик
     if ((h && (h.project_type === 'modpack' || h.btype === 'modpack')) || B_TYPE === 'modpack') {
-      api.invoke('modrinth:versions', h.slug).then(vers => {
+      const versP = (h && h.source === 'curseforge')
+        ? api.invoke('cf:versions', h.modId).then(vs => {
+            const l = Array.isArray(vs) ? vs : [];
+            l.sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+            return l;
+          })
+        : api.invoke('modrinth:versions', h.slug);
+      versP.then(vers => {
         const list = Array.isArray(vers) ? vers : [];
         box.innerHTML = '';
         if (!list.length) { box.innerHTML = '<div class="b-empty">Версий нет</div>'; return; }
@@ -2355,13 +2424,26 @@
       box.innerHTML = '<div class="b-empty">\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0441\u0431\u043e\u0440\u043a\u0443</div>';
       return;
     }
-    reqsPromise().then(reqs => api.invoke('modrinth:versions', h.slug, CURRENT_BUILD.gameVersion, itemType(h) === 'mod' ? CURRENT_BUILD.loader.toLowerCase() : null)
+    reqsPromise().then(reqs => {
+      // CurseForge: список файлов фильтруем сами (API отдаёт все версии сразу)
+      if (h && h.source === 'curseforge') {
+        const ld = itemType(h) === 'mod' ? String(CURRENT_BUILD.loader || '').toLowerCase() : null;
+        return api.invoke('cf:versions', h.modId).then(vs => {
+          const all = Array.isArray(vs) ? vs : [];
+          const list = all.filter(v => (v.game_versions || []).includes(CURRENT_BUILD.gameVersion)
+            && (!ld || !(v.loaders || []).length || (v.loaders || []).includes(ld)));
+          // новейшие файлы сверху (далее стабильная сортировка по типу: релизы > беты > альфы)
+          list.sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+          return { list, needed: [] }; // CF-зависимости считаются при установке
+        });
+      }
+      return api.invoke('modrinth:versions', h.slug, CURRENT_BUILD.gameVersion, itemType(h) === 'mod' ? CURRENT_BUILD.loader.toLowerCase() : null)
       .then(vers => {
         const list = Array.isArray(vers) ? vers : [];
         const pid = (list[0] && list[0].project_id) || null;
         return { list, needed: pid ? (reqs[pid] || []) : [] };
-      })
-    ).then(({ list, needed }) => {
+      });
+    }).then(({ list, needed }) => {
       // Сначала релизы, потом беты, потом альфы (внутри группы — по дате, как отдал Modrinth)
       const TYPE_ORDER = { release: 0, beta: 1, alpha: 2 };
       list.sort((a, b) => (TYPE_ORDER[(a.version_type || '').toLowerCase()] ?? 3) - (TYPE_ORDER[(b.version_type || '').toLowerCase()] ?? 3));
@@ -2383,11 +2465,14 @@
       list.slice(0, 30).forEach(v => {
         const f = (v.files || []).find(x => x.primary) || (v.files || [])[0];
         const mb = f && f.size ? (f.size / 1048576).toFixed(1) + ' MB' : '';
-        const date = fmtDate(v.date_published);
+        const date = fmtDate(v.date_published || v.date);
         const VT_META = { release: { t: 'РЕЛИЗ', bg: '#3c8527' }, beta: { t: 'БЕТА', bg: '#e8862c' }, alpha: { t: 'АЛЬФА', bg: '#1e6eea' } };
         const vm = VT_META[(v.version_type || '').toLowerCase()];
         const typeBadge = vm ? `<span class="ver-badge" style="background:${vm.bg}">${vm.t}</span>` : '';
         const gvs = (v.game_versions || []).slice(0, 3).join(', ') + ((v.game_versions || []).length > 3 ? '...' : '');
+        // номер версии мода — показываем рядом с загрузчиком (fabric/forge/...)
+        const verFull = String(v.version_number || '').trim();
+        const verShort = verFull.length > 42 ? verFull.slice(0, 42) + '…' : verFull;
         // подсветка: нужная по диагнозу ИЛИ требуемая установленным модом
         const need = versionNeed(specificNeeded, v);
         const diagMatch = !!(hl && hl.needVersion && versionMatchesRange(v.version_number, hl.needVersion));
@@ -2402,7 +2487,7 @@
         }
         row.innerHTML = `
           <div style="display:flex;flex-direction:column;gap:3px;min-width:0">
-            <div class="bm-name">${escapeHtml(gvs)} &middot; ${escapeHtml((v.loaders || []).join('/'))} ${tags}</div>
+            <div class="bm-name" title="${escapeHtml(verFull)}">${escapeHtml(gvs)} &middot; ${escapeHtml((v.loaders || []).join('/')) || '&mdash;'}${verShort ? ' &middot; <span style="color:var(--mc-green-2);font-weight:600">' + escapeHtml(verShort) + '</span>' : ''} ${tags}</div>
             <div class="bm-meta">${typeBadge}${date}${mb ? ' &middot; ' + mb : ''}</div>
           </div>
           <div style="display:flex;flex-direction:column;gap:4px;margin-top:2px">
@@ -2453,7 +2538,10 @@
     const fb = $('#mpFavBtn');
     if (fb) fb.addEventListener('click', () => toggleFav(h, fb));
     });
-    api.invoke('modrinth:project', h.slug).then(p => {
+    const projP = (h && h.source === 'curseforge')
+      ? api.invoke('cf:project', h.modId)
+      : api.invoke('modrinth:project', h.slug);
+    projP.then(p => {
       if (!p) return;
       const sub = $('#mpSub');
       if (sub) {
@@ -2541,6 +2629,32 @@
   }
 
   function doInstallChecked(h, version, withDeps) {
+    // CurseForge: зависимости — это id проектов; ставим через builds:install-cf-mod
+    if (h && h.source === 'curseforge') {
+      const deps = (version.dependencies || []);
+      const fileId = version.fileId != null ? version.fileId : version.id;
+      if (!withDeps && deps.length) {
+        openModal('Зависимости', `
+          <div style="font-family:var(--mc-font-body);font-size:12px;line-height:1.6;color:var(--mc-grey-2)">
+            <div style="font-family:var(--mc-font);color:var(--mc-green-2);font-size:13px;margin-bottom:8px;letter-spacing:.06em">${escapeHtml(h.title)} требует:</div>
+            <p style="margin:0">ещё ${deps.length} мод(ов) из CurseForge</p>
+            <p style="margin-top:8px;color:var(--mc-grey-3);font-size:11px">Без них мод может не работать.</p>
+          </div>
+          <div style="display:flex;gap:8px;margin-top:12px">
+            <button class="secondary-btn" id="mDepNo" style="margin:0;flex:1">ТОЛЬКО МОД</button>
+            <button class="play-btn" id="mDepYes" style="margin:0;flex:1;font-size:14px">С ЗАВИСИМОСТЯМИ</button>
+          </div>
+        `, false, () => {
+          const dn = $('#mDepNo');
+          if (dn) dn.addEventListener('click', () => { modal.classList.remove('show'); installCfNow(h, fileId, false); });
+          const dy = $('#mDepYes');
+          if (dy) dy.addEventListener('click', () => { modal.classList.remove('show'); installCfNow(h, fileId, true); });
+        });
+        return;
+      }
+      installCfNow(h, fileId, withDeps);
+      return;
+    }
     const deps = (version.dependencies || []).filter(d => d.dependency_type === 'required' && d.project_id);
     if (!withDeps && deps.length) {
       const ids = deps.map(d => d.project_id);
@@ -2579,6 +2693,25 @@
         hideProgress();
         autoIconFromMod(h);
         afterModInstalled(h, versionId);
+        refreshBuilds();
+      })
+      .catch(err => {
+        setStatus('ОШИБКА: ' + (err.message || err), 'busy');
+        hideProgress();
+      });
+  }
+
+  // Установка мода из CurseForge в текущую сборку (+ опционально зависимости)
+  function installCfNow(h, fileId, withDeps) {
+    if (!CURRENT_BUILD || !h || h.modId == null) return;
+    setStatus('УСТАНОВКА: ' + h.title.toUpperCase(), 'busy');
+    updateProgress({ name: h.title, frac: 0 });
+    api.invoke('builds:install-cf-mod', { buildId: CURRENT_BUILD.id, modId: h.modId, fileId: fileId, withDeps: !!withDeps })
+      .then(r => {
+        setStatus('УСТАНОВЛЕНО: ' + ((r && r.count) || 1) + ' ФАЙЛ(ОВ)', '');
+        hideProgress();
+        autoIconFromMod(h);
+        afterModInstalled(h, null);
         refreshBuilds();
       })
       .catch(err => {
@@ -2834,6 +2967,9 @@
     api.invoke('settings:get').then(s => {
       if (s) {
         settingsCache = { ...settingsCache, ...s };
+        // Источник каталога из настроек (localStorage мог отстать)
+        if (s.catalogSource) setCatalogSrc(s.catalogSource, true);
+        updateCatalogTitle();
         applyTheme();
         applyEco();
         applyCustom();
@@ -2855,6 +2991,7 @@
     }).catch(() => {});
 
     buildTypeButtons();
+    updateCatalogTitle();
     refreshBuilds();
     api.invoke('update:check').then(u => {
       if (u && u.version) showUpdateModal(u);

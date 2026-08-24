@@ -53,7 +53,7 @@ function createWindow() {
       responseHeaders: {
         ...details.responseHeaders,
         'Content-Security-Policy': [
-          "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://cdn.modrinth.com https://launchercontent.mojang.com https://i.imgur.com; font-src 'self' data:"
+          "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://cdn.modrinth.com https://launchercontent.mojang.com https://i.imgur.com https://media.forgecdn.net https://mediafile.forgecdn.net https://www.curseforge.com; font-src 'self' data:"
         ]
       }
     });
@@ -113,11 +113,12 @@ function registerIpc() {
     experimental: store.get('experimental'),
     theme: store.get('theme'),
     custom: store.get('custom'),
-    economy: store.get('economy')
+    economy: store.get('economy'),
+    catalogSource: store.get('catalogSource') || 'modrinth'
   }));
 
   ipcMain.handle('settings:set', (_e, key, value) => {
-    const allowed = ['username', 'ram', 'mirror', 'javaPath', 'language', 'showSnapshots', 'optimize', 'jvmArgs', 'closeLauncherOnGame', 'showOldVersions', 'experimental', 'theme', 'width', 'height', 'launcherMode', 'updateUrl', 'custom', 'economy'];
+    const allowed = ['username', 'ram', 'mirror', 'javaPath', 'language', 'showSnapshots', 'optimize', 'jvmArgs', 'closeLauncherOnGame', 'showOldVersions', 'experimental', 'theme', 'width', 'height', 'launcherMode', 'updateUrl', 'custom', 'economy', 'catalogSource'];
     if (!allowed.includes(key)) throw new Error('Bad key');
     store.set(key, value);
     // При изменении username обновляем активный аккаунт, если он существует
@@ -287,6 +288,16 @@ function registerIpc() {
   ipcMain.handle('modrinth:categories', () => mods.mrCategories());
   ipcMain.handle('modrinth:loaders', () => mods.mrLoaders());
   ipcMain.handle('modrinth:game-versions', () => mods.mrGameVersions());
+  /* ============ CurseForge каталог ============ */
+  ipcMain.handle('cf:search', async (_e, opts) => mods.cfSearch(opts || {}));
+  ipcMain.handle('cf:project', async (_e, modId) => mods.cfProject(modId));
+  ipcMain.handle('cf:versions', async (_e, modId) => mods.cfVersions(modId));
+  ipcMain.handle('builds:install-cf-mod', async (e, opts) => {
+    const out = await mods.cfInstallMod(opts || {}, (fr) =>
+      e.sender.send('builds:progress', { name: 'Загрузка мода', frac: fr }));
+    emit('builds:changed', {});
+    return out;
+  });
   ipcMain.handle('builds:list', () => mods.buildsList());
   ipcMain.handle('builds:create', async (e, opts) => {
     const b = await mods.buildCreate({
@@ -339,7 +350,10 @@ function registerIpc() {
   }));
   ipcMain.handle('builds:install-modpack', async (e, opts) => {
     try {
-      const id = await mods.installModpack(opts || {}, (fr, stage) => e.sender.send('builds:progress', { frac: fr, name: stage || 'Модпак' }));
+      const o = opts || {};
+      const id = (o.source === 'curseforge')
+        ? await mods.cfInstallModpack(o, (fr, stage) => e.sender.send('builds:progress', { frac: fr, name: stage || 'Модпак' }))
+        : await mods.installModpack(o, (fr, stage) => e.sender.send('builds:progress', { frac: fr, name: stage || 'Модпак' }));
       emit('builds:changed', {});
       return id;
     } catch (err) {

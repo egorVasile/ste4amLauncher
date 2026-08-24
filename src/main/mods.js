@@ -938,9 +938,17 @@ async function installProject({ buildId, project, versionId, withDeps, type = 'm
   const queue = [];
   const seen = new Set();
   const verCache = new Map();
-  async function pushDep(projectId) {
+  async function pushDep(projectId, pinnedVersionId) {
     if (seen.has(projectId)) return;
     seen.add(projectId);
+    // Зависимость с зафиксированной версией (version_id) — ставим ИМЕННО её,
+    // а не новейшую: моды часто патчат internals конкретной версии (Sodium и т.п.)
+    if (pinnedVersionId) {
+      try {
+        const v = await mrVersion(pinnedVersionId);
+        if (v && v.files && v.files[0]) { queue.push({ projectId, version: v }); return; }
+      } catch (e) { log('dep pinned version fail, fallback to latest', projectId, e && e.message); }
+    }
     let vers = verCache.get(projectId);
     if (!vers) {
       const qs = { game_versions: JSON.stringify([build.gameVersion]) };
@@ -960,7 +968,7 @@ async function installProject({ buildId, project, versionId, withDeps, type = 'm
     queue.push({ projectId: project, version: v });
     if (withDeps) {
       for (const d of v.dependencies || []) {
-        if (d.dependency_type === 'required' && d.project_id) await pushDep(d.project_id);
+        if (d.dependency_type === 'required' && d.project_id) await pushDep(d.project_id, d.version_id || null);
       }
     }
   }
@@ -2152,6 +2160,182 @@ async function diagAutofix({ buildId, problems }, onProgress) {
   return { ok: true, actions, needConsent };
 }
 
+/* ============ CurseForge каталог ============ */
+const CF_BASE = 'https://api.curse.tools/v1';
+const CF_CLASS = { mod: 6, resourcepack: 12, shaderpack: 6552, modpack: 4471 };
+
+async function cfGet(p) { return JSON.parse((await httpGet(CF_BASE + p)).toString('utf8')); }
+
+async function cfSearch(opts = {}) {
+  const q = new URLSearchParams();
+  q.set('gameId', '432');
+  q.set('classId', String(CF_CLASS[opts.type] || 6));
+  if (opts.q) q.set('searchFilter', String(opts.q));
+  if (opts.gameVersion) q.set('gameVersion', String(opts.gameVersion));
+  q.set('sortField', '2'); // популярные
+  q.set('sortOrder', 'desc');
+  q.set('index', String(opts.offset || 0));
+  q.set('pageSize', '25');
+  const j = await cfGet('/mods/search?' + q.toString());
+  return {
+    total: (j.pagination && j.pagination.totalCount) || 0,
+    hits: (j.data || []).map(m => ({
+      source: 'curseforge',
+      modId: m.id,
+      slug: String(m.slug || m.id),
+      title: m.name,
+      description: m.summary || '',
+      icon_url: (m.logo && (m.logo.thumbnailUrl || m.logo.imageUrl)) || '',
+      downloads: m.downloadCount || 0,
+      categories: (m.categories || []).map(c => c.name).slice(0, 3)
+    }))
+  };
+}
+
+async function cfProject(modId) {
+  const m = (await cfGet('/mods/' + modId)).data;
+  return {
+    source: 'curseforge', modId: m.id, slug: String(m.slug || m.id),
+    title: m.name, description: m.summary || '',
+    icon_url: (m.logo && (m.logo.thumbnailUrl || m.logo.imageUrl)) || '',
+    downloads: m.downloadCount || 0,
+    categories: (m.categories || []).map(c => c.name)
+  };
+}
+
+// Файлы CF → нормализованные строки (как у Modrinth)
+function cfNormFile(f) {
+  const gv = f.gameVersions || [];
+  const loaders = ['fabric', 'forge', 'neoforge', 'quilt'].filter(l => gv.some(v => String(v).toLowerCase() === l));
+  return {
+    source: 'curseforge',
+    modId: f.modId,
+    id: String(f.id),
+    fileId: f.id,
+    name: f.displayName || f.fileName,
+    version_number: f.fileName,
+    version_type: f.releaseType === 1 ? 'release' : (f.releaseType === 2 ? 'beta' : 'alpha'),
+    game_versions: gv.filter(v => /^\d/.test(String(v))),
+    loaders,
+    date: f.fileDate || '',
+    dependencies: (f.dependencies || []).filter(d => d.relationType === 3).map(d => String(d.modId))
+  };
+}
+
+async function cfVersions(modId) {
+  const j = await cfGet('/mods/' + modId + '/files?pageSize=100');
+  return (j.data || []).map(cfNormFile);
+}
+
+async function cfFileMeta(modId, fileId) {
+  // Официальный эндпоинт CF: /mods/{id}/files/{fileId} (не /file/)
+  return (await cfGet('/mods/' + modId + '/files/' + fileId)).data;
+}
+
+// Установка CF-мода в сборку (+ зависимости)
+async function cfInstallMod({ buildId, modId, fileId, withDeps }, onProgress) {
+  const builds = await loadBuilds();
+  const b = builds.find(x => x.id === buildId);
+  if (!b) throw new Error('Сборка не найдена');
+  const dir = modsDir(buildId);
+  await fsp.mkdir(dir, { recursive: true });
+  const file = await cfFileMeta(modId, fileId);
+  const dest = path.join(dir, file.fileName);
+  if (!fs.existsSync(dest)) await downloadFile(file.downloadUrl, dest, p => onProgress && onProgress(p));
+  const installed = [{ projectId: 'cf' + modId, filename: file.fileName }];
+  let count = 1;
+  if (withDeps) {
+    for (const depId of (file.dependencies || []).map(d => String(d.modId))) {
+      try {
+        const depFiles = await cfVersions(depId);
+        const ld = String(b.loader || '').toLowerCase();
+        const TYPE_ORD = { release: 0, beta: 1, alpha: 2 };
+        const match = depFiles
+          .filter(x => x.game_versions.includes(b.gameVersion) && (!ld || !x.loaders.length || x.loaders.includes(ld)))
+          .sort((a, c) => {
+            // сначала стабильные релизы, внутри группы — самые свежие по дате
+            const ta = TYPE_ORD[a.version_type] ?? 3;
+            const tc = TYPE_ORD[c.version_type] ?? 3;
+            if (ta !== tc) return ta - tc;
+            return String(c.date || '').localeCompare(String(a.date || ''));
+          })[0];
+        if (!match) continue;
+        const dmeta = await cfFileMeta(depId, match.fileId);
+        const ddest = path.join(dir, dmeta.fileName);
+        if (!fs.existsSync(ddest)) await downloadFile(dmeta.downloadUrl, ddest);
+        installed.push({ projectId: 'cf' + depId, filename: dmeta.fileName });
+        count++;
+      } catch (e) { log('cf dep fail', depId, e && e.message); }
+    }
+  }
+  // Реестр сборки: экспорт/диагностика/список установленных знают о CF-модах
+  await recordInstalled(buildId, 'mod', installed);
+  return { installed, count };
+}
+
+// Установка CF-модпака: zip → manifest.json → overrides + файлы
+async function cfInstallModpack({ modId, fileId, name }, onProgress) {
+  const report = (fr, stage) => onProgress && onProgress(fr, stage || '');
+  report(0.02, 'Скачивание модпака...');
+  const file = await cfFileMeta(modId, fileId);
+  const tmpZip = path.join(ROOT, 'cache', 'cfpack-' + Date.now().toString(36) + '.zip');
+  await downloadFile(file.downloadUrl, tmpZip, p => report(0.02 + p * 0.18, 'Скачивание модпака...'));
+  const tmp = path.join(ROOT, 'cache', 'cfpack-x-' + Date.now().toString(36));
+  await fsp.mkdir(tmp, { recursive: true });
+  let okZip = await execOut('tar', ['-xf', tmpZip, '-C', tmp]);
+  if (!okZip) okZip = await execOut('powershell.exe', ['-NoProfile', '-Command', 'Expand-Archive -LiteralPath ' + JSON.stringify(tmpZip) + ' -DestinationPath ' + JSON.stringify(tmp) + ' -Force']);
+  if (!okZip) throw new Error('Не удалось распаковать модпак');
+
+  let manifest;
+  try {
+    let txt = await fsp.readFile(path.join(tmp, 'manifest.json'), 'utf8');
+    if (txt.charCodeAt(0) === 0xFEFF) txt = txt.slice(1);
+    manifest = JSON.parse(txt);
+  } catch (e) { throw new Error('В модпаке нет manifest.json — это не сборка CurseForge?'); }
+
+  const gameVersion = (manifest.minecraft && manifest.minecraft.version) || '1.21.1';
+  const ml = ((manifest.minecraft && manifest.minecraft.modLoaders) || [])[0] || {};
+  const mlId = String(ml.id || '');
+  const loader = mlId.indexOf('fabric') === 0 ? 'fabric' : mlId.indexOf('neoforge') === 0 ? 'neoforge' : mlId.indexOf('quilt') === 0 ? 'quilt' : 'forge';
+  const preferVer = mlId.split('-').slice(1).join('-') || null;
+
+  const builds = await loadBuilds();
+  const id = 'build-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6);
+  const b = { id, name: String(manifest.name || name || 'Модпак CF').trim().slice(0, 48), gameVersion, loader, icon: 'Grass.png', created: Date.now() };
+  const bdir = buildDir(id);
+  for (const sub of ['game/mods', 'game/resourcepacks', 'game/shaderpacks', 'game/datapacks']) await fsp.mkdir(path.join(bdir, sub), { recursive: true });
+
+  // overrides → game dir
+  const ov = path.join(tmp, manifest.overrides || 'overrides');
+  if (fs.existsSync(ov)) { try { await copyDirContents(ov, path.join(bdir, 'game')); } catch (e) {} }
+
+  builds.unshift(b); await saveBuilds(builds);
+
+  report(0.22, 'Установка ' + loader + '...');
+  let loaderErr = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try { await installLoader(b, gameVersion, loader, (fr, stage) => report(0.22 + Math.min(fr * 0.15, 0.15), stage), preferVer); loaderErr = null; break; }
+    catch (e) { loaderErr = e; if (attempt < 2) await new Promise(r => setTimeout(r, 3000)); }
+  }
+  if (loaderErr) throw new Error('Загрузчик не установился: ' + (loaderErr && loaderErr.message));
+
+  const files = (manifest.files || []).filter(f => f.required !== false);
+  let done = 0;
+  for (const f of files) {
+    done++;
+    report(0.37 + (done / Math.max(1, files.length)) * 0.63, 'Моды ' + done + '/' + files.length);
+    try {
+      const meta = await cfFileMeta(f.projectID, f.fileID);
+      const dest = path.join(modsDir(id), meta.fileName);
+      if (!fs.existsSync(dest)) await downloadFile(meta.downloadUrl, dest);
+      await recordInstalled(id, 'mod', [{ projectId: 'cf' + f.projectID, filename: meta.fileName }]);
+    } catch (e) { log('cf pack file fail', f.projectID, f.fileID, e && e.message); }
+  }
+  try { fs.rmSync(tmp, { recursive: true, force: true }); fs.unlinkSync(tmpZip); } catch (e) {}
+  emitChanged();
+  return id;
+}
+
 module.exports = {
   setRoot,
   mrSearch, mrProject, mrProjectVersions, mrVersion, mrCategories, mrLoaders, mrGameVersions,
@@ -2162,6 +2346,7 @@ module.exports = {
   loadInstalled,
   exportBuild, importBuild, importMrpack, findModrinthByHash, packConfigs, unpackConfigs,
   installModpack,
+  cfSearch, cfProject, cfVersions, cfInstallMod, cfInstallModpack,
   findJava, findJavaMajor, javaCandidates, javaMajor, ensureJavaRuntime,
   modsDir, packsDir, buildDir, loadBuilds,
   ensureSkinMod,
