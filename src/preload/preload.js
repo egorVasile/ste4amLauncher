@@ -71,7 +71,10 @@ const RECEIVE = [
   'builds:changed',
   'mod:progress',
   'builds:progress',
-  'launch:diagnosis'
+  'launch:diagnosis',
+  'builds:migrate-progress',
+  'builds:merge-progress',
+  'diag:autofix-progress'
 ];
 
 contextBridge.exposeInMainWorld('st4am', {
