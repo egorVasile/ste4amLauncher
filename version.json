@@ -27,6 +27,11 @@
                       "sha256":  "a399102263a3442c30591a5837b78b25b8ce624a032a29d703829399b6c86ebb"
                   },
                   {
+                      "path":  "src/main/party.js",
+                      "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/main/party.js",
+                      "sha256":  "96ebb8bf8e639a571e9640f1e34f829c1551ffb09e1cfa1117d9de8786162760"
+                  },
+                  {
                       "path":  "src/main/store.js",
                       "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/main/store.js",
                       "sha256":  "69af5af7eaf68b0bd3ccb4590011d3fd6d6625683ab2d84843e38b7854a5aa0e"
