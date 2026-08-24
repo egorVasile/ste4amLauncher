@@ -19,6 +19,7 @@
   let APP_VERSION = '';
   const WHATSNEW_URL = 'https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/whatsnew.json';
   const NEWS_NOTES = {
+    '3.0.12': "3.0.12 — авто починка работает как надо.\n\n— Полоска прогресса автопочинки теперь движется (раньше стояла на месте)\n— Когда починка закончилась — окно само сменяется на «Всё готово»\n— Удаление конфликтных модов теперь реально работает (даже если ID мода отличается от названия в сборке)\n— Повторяющиеся моды в окне диагностики показываются один раз",
     '3.0.11': "3.0.11 — умная диагностика с автопочинкой.\n\nДиагностика теперь распознаёт конфликты модов Fabric (Incompatible mods found) и показывает, какой мод не хватает, какой кого ломает.\n\nНОВАЯ КНОПКА «СДЕЛАТЬ ВСЁ АВТОМАТИЧЕСКИ»:\n— установит недостающие моды-зависимости;\n— скачает нужную Java и пропишет путь;\n— очистит кэш повреждённых библиотек;\n— при конфликте модов спросит, какой удалить (ничего не удаляется без вашего согласия).",
     '3.0.10': "3.0.10 — аккуратная раскладка кнопок.\n\n— «⇄ Перенести» переехала в карточку сборки, под кнопку «✎ Изменить»\n— Ряд кнопок (Играть/Экспорт/Импорт/Удалить) больше не переполняется\n— Кнопка «Объединить» аккуратно встала в шапке списка сборок",
     '3.0.9': "3.0.9 — перенос и объединение сборок.\n\n1) ПЕРЕНОС СБОРКИ\nКнопка «⇄ Перенести» в сборке: выбери новую версию Minecraft — лаунчер проверит каждый мод, найдёт его версию под новую игру и создаст новую сборку (старая останется). Миры и настройки переносятся по галочке. Моды, которых нет под новую версию, будут перечислены в конце.\n\n2) ОБЪЕДИНЕНИЕ СБОРКИ\nКнопка «🔗 Объединить»: выбери две или более сборок — из их модов соберётся новая. Повторяющиеся моды покажем списком — реши, что оставить. Конфиги и ресурспаки — по галочке.\n\n3) Читаемые названия модов во всех списках вместо ID.",
@@ -1007,17 +1008,24 @@
   function showDiagnostics(report) {
     if (!report || !report.problems || !report.problems.length) return;
     const buildId = report.buildId;
-    let html = '<div style="display:flex;flex-direction:column;gap:14px;max-height:62vh;overflow-y:auto;padding-right:4px">';
+    let     html = '<div style="display:flex;flex-direction:column;gap:14px;max-height:62vh;overflow-y:auto;padding-right:4px">';
+    const shownSlugs = new Set(); // один мод = одна карточка во всех проблемах
     report.problems.forEach(p => {
       const meta = DIAG_META[p.kind] || { label: 'ОШИБКА', color: '#ca3636' };
+      const pMods = (p.mods || []).filter(m => {
+        const key = String(m.slug || '').toLowerCase();
+        if (key && shownSlugs.has(key)) return false;
+        if (key) shownSlugs.add(key);
+        return true;
+      });
       html += `
         <div style="border:2px solid var(--mc-off-black);background:var(--mc-grey-5);padding:10px 12px;border-left:6px solid ${meta.color}">
           <div style="font-family:var(--mc-font);font-size:13px;letter-spacing:.06em;color:${meta.color}">${meta.label}</div>
           <div style="font-family:var(--mc-font-body);font-size:11px;color:var(--mc-grey-2);margin-top:3px;line-height:1.45">${escapeHtml(p.detail)}</div>
           ${p.fix ? `<div style="border-left:3px solid var(--mc-green-4);background:rgba(60,133,39,.12);padding:7px 10px;margin-top:8px;font-family:var(--mc-font-body);font-size:11px;color:var(--mc-grey-1);line-height:1.5"><span style="color:var(--mc-green-2);font-weight:600">КАК ИСПРАВИТЬ:</span> ${escapeHtml(p.fix)}</div>` : ''}`;
-      if (p.mods && p.mods.length) {
+      if (pMods.length) {
         html += '<div style="display:flex;flex-direction:column;gap:6px;margin-top:9px">';
-        p.mods.forEach(m => {
+        pMods.forEach(m => {
           const b = DIAG_BTN[m.action] || { text: '\u041f\u041e\u0414\u0420\u041e\u0411\u041d\u0415\u0415', cls: '' };
           const relParts = [];
           if (m.neededBy && m.neededBy.length) {
@@ -1149,13 +1157,24 @@
                 let inst = null;
                 try { inst = await api.invoke('builds:installed', report.buildId); } catch (e) {}
                 const files = (inst && inst.files) || inst || [];
+                let deleted = 0;
                 for (const s of rm) {
-                  const entry = files.find(x => x.slug === s);
+                  const sl = String(s).toLowerCase();
+                  // совпадение: точный slug -> имя файла содержит id -> Modrinth slug по id
+                  let entry = files.find(x => String(x.slug || '').toLowerCase() === sl);
+                  if (!entry) entry = files.find(x => String(x.filename || '').toLowerCase().includes(sl));
+                  if (!entry) {
+                    try {
+                      const projs = await api.invoke('modrinth:batch-projects', [s]);
+                      const pp = (projs || [])[0];
+                      if (pp && pp.slug) entry = files.find(x => String(x.slug || '').toLowerCase() === String(pp.slug).toLowerCase());
+                    } catch (e) {}
+                  }
                   if (entry && entry.filename) {
-                    try { await api.invoke('builds:delete-mod', report.buildId, entry.filename, 'mod'); } catch (e) {}
+                    try { await api.invoke('builds:delete-mod', report.buildId, entry.filename, 'mod'); deleted++; } catch (e) {}
                   }
                 }
-                mcToast('УДАЛЕНО: ' + rm.length);
+                mcToast('УДАЛЕНО: ' + deleted);
                 refreshBuilds();
               })();
             }
