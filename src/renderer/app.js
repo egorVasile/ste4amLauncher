@@ -2492,11 +2492,17 @@ let CATALOG_SRC = localStorage.getItem('catalog_src') || 'modrinth';
             <div class="bm-meta">${typeBadge}${date}${mb ? ' &middot; ' + mb : ''}</div>
           </div>
           <div style="display:flex;flex-direction:column;gap:4px;margin-top:2px">
-            <button class="b-mini play" data-dep="0" style="width:100%">\u0423\u0441\u0442\u0430\u043d\u043e\u0432\u0438\u0442\u044c</button>
-            <button class="b-mini" data-dep="1" style="width:100%">\u0421 \u0437\u0430\u0432\u0438\u0441\u0438\u043c\u043e\u0441\u0442\u044f\u043c\u0438</button>
+            ${PARTY.connected && PARTY.phase === 'building'
+              ? '<button class="b-mini play" data-add="1" style="width:100%">ДОБАВИТЬ В СБОРКУ</button>'
+              : `<button class="b-mini play" data-dep="0" style="width:100%">\u0423\u0441\u0442\u0430\u043d\u043e\u0432\u0438\u0442\u044c</button>
+                 <button class="b-mini" data-dep="1" style="width:100%">\u0421 \u0437\u0430\u0432\u0438\u0441\u0438\u043c\u043e\u0441\u0442\u044f\u043c\u0438</button>`}
           </div>`;
-        row.querySelector('[data-dep="0"]').addEventListener('click', () => doInstall(h, v, false));
-        row.querySelector('[data-dep="1"]').addEventListener('click', () => doInstall(h, v, true));
+        if (PARTY.connected && PARTY.phase === 'building') {
+          row.querySelector('[data-add]').addEventListener('click', () => doPartyAdd(h, v));
+        } else {
+          row.querySelector('[data-dep="0"]').addEventListener('click', () => doInstall(h, v, false));
+          row.querySelector('[data-dep="1"]').addEventListener('click', () => doInstall(h, v, true));
+        }
         box.appendChild(row);
       });
     }).catch(err => {
@@ -2684,8 +2690,29 @@ let CATALOG_SRC = localStorage.getItem('catalog_src') || 'modrinth';
     installNow(h, version.id, withDeps);
   }
 
+  // Во время совместной сборки «установка» = добавить файл в список сети.
+  // Скачивание произойдёт у всех только в фазе финала.
+  function doPartyAdd(h, v) {
+    if (!PARTY.connected || PARTY.phase !== 'building') return;
+    if (!partyCanInstall()) return;
+    const file = {
+      filename: (h.title || 'mod') + '.jar',
+      type: itemType(h),
+      title: h.title || h.filename,
+      source: h.source || 'modrinth',
+      ref: (h.source === 'curseforge')
+        ? { modId: h.modId, fileId: v && v.fileId != null ? v.fileId : (v && v.id != null ? Number(v.id) : null) }
+        : { slug: h.slug, versionId: v && v.id ? v.id : null }
+    };
+    api.invoke('party:report-add', file).then(() => {
+      modal.classList.remove('show');
+      mcToast('ДОБАВЛЕНО В СПИСОК СБОРКИ: ' + (h.title || ''));
+    }).catch(() => {});
+  }
+
   function installNow(h, versionId, withDeps) {
     if (!CURRENT_BUILD) return;
+    if (PARTY.connected && PARTY.phase === 'building') { doPartyAdd(h, { id: versionId }); return; }
     if (!partyCanInstall()) return;
     modal.classList.remove('show'); // страница мода закрывается — установка видна в статусе
     setStatus('УСТАНОВКА: ' + h.title.toUpperCase(), 'busy');
@@ -2707,6 +2734,7 @@ let CATALOG_SRC = localStorage.getItem('catalog_src') || 'modrinth';
   // Установка мода из CurseForge в текущую сборку (+ опционально зависимости)
   function installCfNow(h, fileId, withDeps) {
     if (!CURRENT_BUILD || !h || h.modId == null) return;
+    if (PARTY.connected && PARTY.phase === 'building') { doPartyAdd(h, { fileId }); return; }
     if (!partyCanInstall()) return;
     modal.classList.remove('show'); // страница мода закрывается — установка видна в статусе
     setStatus('УСТАНОВКА: ' + h.title.toUpperCase(), 'busy');
@@ -2919,9 +2947,10 @@ let CATALOG_SRC = localStorage.getItem('catalog_src') || 'modrinth';
 .p-chat-list{overflow-y:auto;background:var(--mc-grey-5,#111);border:2px solid var(--mc-off-black);padding:6px 8px;font-family:var(--mc-font-body);font-size:11px;color:var(--mc-grey-1);display:flex;flex-direction:column;gap:3px}
 .p-chat-list b{color:var(--mc-green-2,#5fbf4a)}
 .ph-banner{font-family:var(--mc-font);font-size:12px;border:1px dashed;padding:6px 14px;border-radius:6px;background:var(--mc-grey-4,#1b1b1b)}
-.p-done-zone{position:fixed;bottom:0;left:50%;transform:translateX(-50%);z-index:9001;pointer-events:auto;padding:6px 34px 8px;cursor:pointer}
+.p-done-zone{position:fixed;bottom:0;left:50%;transform:translateX(-50%);z-index:9001;pointer-events:auto;padding:52px 40px 10px;cursor:pointer}
+.p-done-zone::before{content:'НАВЕДИТЕ — ЗАКОНЧИТЬ';display:block;position:absolute;top:14px;left:50%;transform:translateX(-50%);font-family:var(--mc-font);font-size:9px;color:var(--mc-grey-3);letter-spacing:.08em;white-space:nowrap}
 .p-done-zone::after{content:'';display:block;width:42px;height:4px;border-radius:3px;background:rgba(255,255,255,.35)}
-.p-done-wrap{position:fixed;bottom:40px;left:50%;transform:translateX(-50%);opacity:0;pointer-events:none;transition:opacity .18s ease}
+.p-done-wrap{position:absolute;bottom:26px;left:50%;transform:translateX(-50%);opacity:0;pointer-events:none;transition:opacity .18s ease}
 .p-done-zone:hover .p-done-wrap{opacity:1;pointer-events:auto}
 #pChat{height:150px;overflow-y:auto;background:var(--mc-grey-5,#111);border:2px solid var(--mc-off-black);padding:6px 8px;font-family:var(--mc-font-body);font-size:11px;color:var(--mc-grey-1);display:flex;flex-direction:column;gap:3px}
 #pChat b{color:var(--mc-green-2,#5fbf4a)}`;
@@ -3022,9 +3051,9 @@ let CATALOG_SRC = localStorage.getItem('catalog_src') || 'modrinth';
     if (!PARTY.connected || !PARTY.buildId) return;
     try {
       if (file.source === 'curseforge' && file.ref && file.ref.modId != null && file.ref.fileId != null) {
-        await api.invoke('builds:install-cf-mod', { buildId: PARTY.buildId, modId: file.ref.modId, fileId: file.ref.fileId, withDeps: false });
+        await api.invoke('builds:install-cf-mod', { buildId: PARTY.buildId, modId: file.ref.modId, fileId: file.ref.fileId, withDeps: true });
       } else if (file.ref && file.ref.slug) {
-        await api.invoke('builds:install-mod', { buildId: PARTY.buildId, project: file.ref.slug, versionId: file.ref.versionId || null, withDeps: false, type: file.type });
+        await api.invoke('builds:install-mod', { buildId: PARTY.buildId, project: file.ref.slug, versionId: file.ref.versionId || null, withDeps: true, type: file.type });
       } else return;
       refreshBuilds();
     } catch (e) {

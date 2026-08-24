@@ -601,7 +601,7 @@ ipcMain.handle('update:status', () => updater.lastUpdateStatus());
   ipcMain.handle('party:finalize', () => { party.finalize(); return true; });
   ipcMain.handle('party:vote', (_e, o) => party.vote(o && o.reqId, !!(o && o.yes)));
   ipcMain.handle('party:vote-start', (_e, file) => party.voteStartReq(file || {}));
-  ipcMain.handle('party:chat', (_e, o) => party.chat(o && o.text));
+  ipcMain.handle('party:chat', (_e, o) => party.chat(typeof o === 'string' ? o : (o && o.text)));
   ipcMain.handle('party:kick', (_e, o) => party.kick(o && o.user));
   ipcMain.handle('party:report', (_e, o) => party.report(o && o.user, store.get('username')));
   ipcMain.handle('party:rep-vote', (_e, o) => party.repVote(o && o.reqId, !!(o && o.yes)));
