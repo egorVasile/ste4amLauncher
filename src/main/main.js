@@ -598,6 +598,20 @@ ipcMain.handle('update:status', () => updater.lastUpdateStatus());
   ipcMain.handle('party:del-req', (_e, file) => party.delReq(file || {}));
   ipcMain.handle('party:done', () => party.done());
   ipcMain.handle('party:start', () => party.startBuilding());
+  ipcMain.handle('party:ready', (_e, o) => party.ready(!(o && o.ok === false)));
+  // приём раздачи от хоста: создаём копию сборки и качаем все файлы
+  ipcMain.handle('party:import-build', async (_e, o) => {
+    const manifest = o && o.manifest;
+    if (!manifest || !Array.isArray(manifest.files)) throw new Error('Некорректная раздача от хоста');
+    party.dlProgress(0.02);
+    const bid = await mods.importBuild(manifest, (frac, file) => {
+      const f = Math.max(0, Math.min(1, frac));
+      party.dlProgress(f);
+      emit('party:dlprog', { frac: f, file });
+    });
+    party.dlProgress(1);
+    return bid;
+  });
   ipcMain.handle('party:finalize', () => { party.finalize(); return true; });
   ipcMain.handle('party:vote', (_e, o) => party.vote(o && o.reqId, !!(o && o.yes)));
   ipcMain.handle('party:vote-start', (_e, file) => party.voteStartReq(file || {}));

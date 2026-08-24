@@ -3176,12 +3176,16 @@ let CATALOG_SRC = localStorage.getItem('catalog_src') || 'modrinth';
   function renderPartyHud() {
     let hud = document.getElementById('partyHud');
     if (!hud) { hud = document.createElement('div'); hud.id = 'partyHud'; document.body.appendChild(hud); }
-    const active = PARTY.connected && (PARTY.phase === 'building' || PARTY.phase === 'review' || PARTY.phase === 'final');
+    const active = PARTY.connected && (PARTY.phase === 'syncing' || PARTY.phase === 'building' || PARTY.phase === 'review' || PARTY.phase === 'final');
     if (!active) { hud.style.display = 'none'; hud.innerHTML = ''; return; }
     hud.style.display = 'block';
     const hostBtn = (PARTY.mode === 'host' && PARTY.phase === 'building')
       ? '<button class="b-new-btn" id="pHudRev" style="background:#e8862c" title="Перейти к проверке">ЗАВЕРШИТЬ</button>' : '';
-    const banner = PARTY.phase === 'review'
+    const banner = PARTY.phase === 'syncing'
+      ? (PARTY.mode === 'host'
+        ? '<div class="ph-banner" style="color:#5fbf4a;border-color:rgba(95,191,74,.5)">УЧАСТНИКИ СКАЧИВАЮТ РАЗДАЧУ...</div>'
+        : '<div class="ph-banner" style="color:#f0b90b;border-color:rgba(240,185,11,.5)">СКАЧИВАЮ СБОРКУ ХОСТА: <span id="pHudSyncPct">' + Math.round((PARTY.dlFrac || 0) * 100) + '%</span></div>')
+      : PARTY.phase === 'review'
       ? '<div class="ph-banner" style="color:#f0b90b;border-color:rgba(240,185,11,.5)">ИДЁТ ПРОВЕРКА — ДОБАВЛЯТЬ НЕЛЬЗЯ, ТОЛЬКО УДАЛЯТЬ</div>'
       : (PARTY.phase === 'final'
         ? '<div class="ph-banner" style="color:#5fbf4a;border-color:rgba(95,191,74,.5)">СБОРКА ЗАВЕРШЕНА — РАЗДАЁМ ФАЙЛЫ...</div>'
@@ -3351,7 +3355,30 @@ let CATALOG_SRC = localStorage.getItem('catalog_src') || 'modrinth';
       return;
     }
 
-    const phaseName = { lobby: 'ЛОББИ', building: 'СБОРКА', review: 'ПРОВЕРКА', final: 'ФИНАЛ' }[PARTY.phase] || PARTY.phase;
+    const phaseName = { lobby: 'ЛОББИ', syncing: 'РАЗДАЧА СБОРКИ', building: 'СБОРКА', review: 'ПРОВЕРКА', final: 'ФИНАЛ' }[PARTY.phase] || PARTY.phase;
+
+    /* --- раздача: хост отдаёт сборку, гости качают --- */
+    if (PARTY.phase === 'syncing') {
+      const isHost = PARTY.mode === 'host';
+      const pct = Math.round((PARTY.dlFrac || 0) * 100);
+      panel.innerHTML = `
+        <div style="max-width:600px;margin:26px auto;width:100%;padding:0 16px;display:flex;flex-direction:column;gap:12px">
+          <div class="b-title">КОМНАТА «${escapeHtml(PARTY.room ? PARTY.room.name : '')}» <small>РАЗДАЧА СБОРКИ</small></div>
+          ${isHost
+            ? '<div style="font-family:var(--mc-font-body);font-size:11.5px;color:var(--mc-grey-2)">Участники скачивают вашу сборку. Когда все будут готовы — совместная сборка начнётся автоматически.</div>'
+            : `<div style="font-family:var(--mc-font-body);font-size:11.5px;color:var(--mc-grey-2)">Создаётся копия сборки хоста и скачиваются все файлы...</div>
+               <div style="border:2px solid var(--mc-off-black);background:var(--mc-grey-5);height:22px"><div id="pSyncFill" style="height:100%;width:${pct}%;background:var(--mc-green-2,#3c8527)"></div></div>
+               <div style="font-family:var(--mc-font);font-size:12px" id="pSyncLbl">${pct}%</div>`}
+          <div class="mp-vtitle" style="margin-top:6px">ЧАТ</div>
+          <div class="p-chat-list" id="pChat" style="height:150px">${partyChatHtml()}</div>
+          <div style="display:flex;gap:6px">
+            <input type="text" class="p-chat-in" placeholder="сообщение..." maxlength="300" style="flex:1;background:var(--mc-grey-5);border:2px solid var(--mc-off-black);color:var(--mc-off-white);padding:6px 9px;font-family:var(--mc-font-body);font-size:11.5px;outline:none"/>
+            <button class="b-mini play p-chat-send" style="margin:0;width:44px">&#9654;</button>
+          </div>
+        </div>`;
+      partyWireChat();
+      return;
+    }
 
     /* --- лобби: ждём «Начать!» от хоста --- */
     if (PARTY.phase === 'lobby') {
@@ -3374,7 +3401,10 @@ let CATALOG_SRC = localStorage.getItem('catalog_src') || 'modrinth';
       partyWireChat();
       partyRenderMembers();
       const sb = $('#pStartBtn');
-      if (sb) sb.addEventListener('click', () => api.invoke('party:start').catch(() => {}));
+      if (sb) sb.addEventListener('click', async () => {
+        const r = await api.invoke('party:start').catch(() => null);
+        if (r && r.ok === false) mcToast('НЕ УДАЛОСЬ РАЗДАТЬ СБОРКУ' + (r.error ? ': ' + r.error : ''), true);
+      });
       const l = $('#pLeaveBtn');
       if (l) l.addEventListener('click', () => { api.invoke('party:leave').catch(() => {}); partyResetLocal(); renderPartyTab(); });
       return;
@@ -3524,9 +3554,10 @@ let CATALOG_SRC = localStorage.getItem('catalog_src') || 'modrinth';
   api.on('party:event', (ev) => {
     if (!ev || !ev.kind) return;
     if (ev.kind === 'add' && ev.file) {
-      // во время сборки ничего не качаем — файл записан во временный список,
+      // во время совместной сборки ничего не качаем — файл записан во временный список,
       // все скачают при завершении (кнопка «Закончил» → проверка → финал)
       partyNotify(ev.user + ' добавил ' + partyTypeWord(ev.file.type) + ': ' + (ev.file.title || ev.file.filename));
+      if (CURRENT_BUILD) renderInstalled(); // строка «БУДЕТ СКАЧАН» появляется сразу
     } else if (ev.kind === 'remove' && ev.file) {
       partyNotify(ev.user + ' удалил ' + partyTypeWord(ev.file.type) + ': ' + (ev.file.title || ev.file.filename));
       partyDeleteFile(ev.file.filename, ev.file.type);
@@ -3622,6 +3653,37 @@ let CATALOG_SRC = localStorage.getItem('catalog_src') || 'modrinth';
     PARTY.members = st.peers || [];
     partyRenderMembers();
     partySyncAll(st.files || []);
+  });
+  // Хост раздал сборку → принимаем: создаётся копия и качаются все файлы
+  api.on('party:sessionStart', (m) => {
+    const b = m.build || {};
+    partyNotify('Хост раздал сборку «' + (b.name || '') + '» — файлов: ' + (b.files || []).length + '. Скачиваю...', { timeout: 6000 });
+    PARTY.phase = 'syncing';
+    renderPartyTab();
+    renderPartyHud();
+    api.invoke('party:import-build', { manifest: b }).then(bid => {
+      PARTY.buildId = bid;
+      if (PARTY.room) PARTY.room.name = b.name || PARTY.room.name;
+      return api.invoke('party:ready', { ok: true });
+    }).then(() => {
+      mcToast('СБОРКА ХОСТА СКАЧАНА — ГОТОВ!');
+      renderPartyTab();
+    }).catch(err => {
+      partyNotify('Не удалось принять сборку: ' + (err.message || err), { timeout: 9000 });
+      api.invoke('party:ready', { ok: false }).catch(() => {});
+    });
+  });
+  api.on('party:dlprog', (d) => {
+    PARTY.dlFrac = d.frac;
+    const fill = document.getElementById('pSyncFill');
+    const lbl = document.getElementById('pSyncLbl');
+    if (fill) fill.style.width = Math.round(d.frac * 100) + '%';
+    if (lbl) lbl.textContent = Math.round(d.frac * 100) + '%';
+    const hud = document.getElementById('pHudSyncPct');
+    if (hud) hud.textContent = Math.round(d.frac * 100) + '%';
+  });
+  api.on('party:readyUpdate', (r) => {
+    partyNotify((r.user || 'Участник') + (r.ok === false ? ' НЕ СМОГ скачать раздачу' : ' скачал раздачу') + ' (' + r.ready + '/' + r.total + ')', { timeout: 5000 });
   });
   api.on('party:kicked', () => {
     partyNotify('Вас исключили из комнаты ' + partyFace(), { timeout: 7000 });

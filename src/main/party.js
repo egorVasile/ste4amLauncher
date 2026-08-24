@@ -24,8 +24,8 @@ const path = require('path');
 const PORT = parseInt(process.env.ST4AM_PARTY_PORT, 10) || 57410;
 const MAGIC = 'ST4AM1';            // префикс всех пакетов — отсекаем чужой трафик
 const ANNOUNCE_MS = 3000;          // период объявления комнаты
-const PEER_TIMEOUT = 12000;        // клиент молчит столько — считаем вышедшим
-const HOST_TIMEOUT = 12000;        // хост молчит столько — клиент отваливается
+const PEER_TIMEOUT = 20000;        // клиент молчит столько — считаем вышедшим
+const HOST_TIMEOUT = 20000;        // хост молчит столько — клиент отваливается
 const DEL_TIMEOUT = 10000;         // таймаут подтверждения удаления
 const JOIN_TIMEOUT = 10000;        // таймаут подтверждения входа в комнату
 const COOLDOWN_MS = 3000;          // кулдаун за спам-установки
@@ -44,7 +44,7 @@ let joinedOk = false;              // клиент уже принят в ком
 let room = null;                   // { id, name, buildId, build }
 let hostAddr = null;               // { ip, port } для клиента
 let lastHostSeen = 0;
-let phase = 'lobby';               // 'lobby' | 'building' | 'review' | 'final'
+let phase = 'lobby';               // 'lobby' | 'syncing' | 'building' | 'review' | 'final'
 let doneSet = new Set();           // host: кто нажал «Закончил»
 let reviewCfg = { enabled: true, sec: 60 }; // таймаут проверки — настройка хоста
 const votes = new Map();           // host: reqId → голосование
@@ -58,7 +58,7 @@ const parts = new Map();           // сборка фрагментирован�
 let pendingPath = null;
 const pendingFiles = new Map();    // 'type|filename' → file
 
-function log(...a) { console.log('[party]', ...a); }
+function log(...a) { try { console.log('[party]', ...a); } catch (e) {} } // битый stdout скрытого процесса не должен ронять сеть
 function makeId() { return crypto.randomUUID ? crypto.randomUUID() : crypto.randomBytes(16).toString('hex'); }
 
 // Временный файл: список модов комнаты (без скачивания — только запись)
@@ -197,6 +197,9 @@ function handle(m, rinfo) {
     case 'vote_result': return onVoteResult(m);
     case 'chat': return onChat(m, rinfo);
     case 'kick': return onKick();
+    case 'session_start': return onSessionStart(m);
+    case 'ready': return onReady(m);
+    case 'dlprog': return onDlProg(m);
     case 'rep_req': return onRepReq(m, rinfo);
     case 'rep': return onRep(m);
     case 'rep_open': return onRepOpen(m);
@@ -207,13 +210,15 @@ function handle(m, rinfo) {
 
 /* ---------- ХОСТ ---------- */
 
-// гость спрашивает «кто здесь?» — хост отвечает объявлением
+// гость спрашивает «кто здесь?» — хост отвечает объявлением (дважды, против потери UDP)
 function onDiscover(m, rinfo) {
   if (mode !== 'host' || !room) return;
-  send({
+  const ann = {
     t: 'announce', roomId: room.id, name: room.name, hostId: me.id, hostUser: me.user,
     members: peers.size + 1, build: room.build, uport: myUport
-  }, rinfo.address, rinfo.port);
+  };
+  send(ann, rinfo.address, rinfo.port);
+  setTimeout(() => send(ann, rinfo.address, rinfo.port), 250);
 }
 
 // гость держит соединение: обновляем lastSeen и отвечаем понгом
@@ -787,7 +792,7 @@ function stop(reason) {
   for (const [, rec] of pending) clearTimeout(rec.timer);
   for (const [, rec] of reports) if (rec.timer) clearTimeout(rec.timer);
   pending.clear(); reports.clear(); peers.clear(); filesMap.clear(); discovered.clear();
-  doneSet.clear(); votes.clear(); phase = 'lobby'; joinedOk = false;
+  doneSet.clear(); votes.clear(); readySet.clear(); phase = 'lobby'; joinedOk = false;
   clearPendingFile();
   const was = mode;
   mode = 'off'; room = null; hostAddr = null;
@@ -809,13 +814,77 @@ async function create({ name, buildId, user, review }) {
 }
 
 // хост нажал «Начать!» — лобби переходит к сборке
+// хост нажал «Начать!» — раздаёт свою сборку участникам, затем совместная сборка
 function startBuilding() {
-  if (mode !== 'host' || phase !== 'lobby') return { ok: false };
+  if (mode !== 'host' || phase !== 'lobby') return Promise.resolve({ ok: false });
+  const mods = require('./mods'); // лениво: цикла нет, ROOT уже настроен
+  return mods.exportBuild(room.buildId).then(exp => {
+    if (!exp.ok) return { ok: false, error: exp.error || 'export failed' };
+    const manifest = exp.manifest;
+    delete manifest.configArchive; // конфиги не синхронизируем — размер
+    if (exp.skipped && exp.skipped.length) {
+      emit('party:event', { kind: 'chat', user: 'система', text: 'Не синхронизировано (нет в каталогах): ' + exp.skipped.slice(0, 5).join(', ') });
+    }
+    phase = 'syncing';
+    readySet.clear();
+    readySet.add(me.id); // у хоста сборка уже есть
+    for (const p of peers.values()) send({ t: 'session_start', room: room.id, build: manifest }, p.ip, p.port);
+    hostBroadcast({ t: 'phase', phase: 'syncing' });
+    emit('party:phase', { phase: 'syncing', files: [] });
+    emit('party:readyUpdate', { ready: 1, total: peers.size + 1, user: me.user });
+    emit('party:status', status());
+    return { ok: true };
+  }).catch(e => ({ ok: false, error: e.message }));
+}
+
+function onSessionStart(m) {
+  if (mode !== 'client') return;
+  lastHostSeen = Date.now();
+  phase = 'syncing';
+  emit('party:phase', { phase: 'syncing', files: [] });
+  emit('party:sessionStart', { build: m.build || {} });
+}
+
+// клиент: копия сборки скачана — сообщаем хосту
+function ready(ok) {
+  if (mode === 'client' && hostAddr) {
+    send({ t: 'ready', room: room.id, peer: me.id, user: me.user, ok: !!ok }, hostAddr.ip, hostAddr.port);
+    return { ok: true };
+  }
+  return { ok: false };
+}
+
+const readySet = new Set();        // host: кто скачал раздачу
+function onReady(m) {
+  if (mode !== 'host' || phase !== 'syncing') return;
+  if (readySet.has(m.peer)) return;
+  readySet.add(m.peer);
+  const p = peers.get(m.peer);
+  const user = (p && p.user) || m.user || '?';
+  emit('party:readyUpdate', { ready: readySet.size, total: peers.size + 1, user, ok: m.ok !== false });
+  if (readySet.size >= peers.size + 1) enterBuilding();
+}
+
+// все скачали → совместная сборка
+function enterBuilding() {
+  if (mode !== 'host' || phase !== 'syncing') return;
   phase = 'building';
   hostBroadcast({ t: 'phase', phase: 'building' });
   emit('party:phase', { phase: 'building', files: [] });
   emit('party:status', status());
-  return { ok: true };
+}
+
+// прогресс скачивания раздачи у клиента — ретранслируем хосту
+function dlProgress(frac) {
+  if (mode === 'client' && hostAddr) {
+    send({ t: 'dlprog', room: room.id, peer: me.id, user: me.user, frac }, hostAddr.ip, hostAddr.port);
+  }
+}
+
+function onDlProg(m) {
+  if (mode !== 'host') return;
+  const p = peers.get(m.peer);
+  emit('party:peerDl', { user: (p && p.user) || m.user || '?', frac: m.frac });
 }
 
 async function join({ roomId, ip, port, user, buildId }) {
@@ -1022,4 +1091,4 @@ function status() {
 
 function setUser(u) { if (u) me.user = u; }
 
-module.exports = { start, stop, create, join, leave: () => stop('leave'), answer, delAnswer, reportAdd, delReq, roomsList, discoverNow, pendingList, status, setUser, done, finalize, startBuilding, vote, voteStartReq, chat, kick, report, repVote, clearPendingFile, uport: () => myUport, PORT };
+module.exports = { start, stop, create, join, leave: () => stop('leave'), answer, delAnswer, reportAdd, delReq, roomsList, discoverNow, pendingList, status, setUser, done, finalize, startBuilding, ready, dlProgress, vote, voteStartReq, chat, kick, report, repVote, clearPendingFile, uport: () => myUport, PORT };
