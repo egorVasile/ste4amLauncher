@@ -344,6 +344,15 @@ function registerIpc() {
     mods.mergeBuilds(opts || {}, p => { try { e.sender.send('builds:merge-progress', p); } catch (er) {} })
       .then(resolve).catch(reject);
   }));
+  // Смена загрузчика сборки (та же версия игры, другой загрузчик)
+  ipcMain.handle('builds:migrate-loader', (e, opts) => new Promise((resolve, reject) => {
+    mods.migrateBuildLoader(opts || {}, p => { try { e.sender.send('builds:migrate-loader-progress', p); } catch (er) {} })
+      .then(resolve).catch(reject);
+  }));
+  // Версии загрузчика для выпадающего списка
+  ipcMain.handle('builds:loader-versions', async (_e, loader, gameVersion) => {
+    return mods.getLoaderVersions(loader, gameVersion);
+  });
   // Умная диагностика: автопочинка
   ipcMain.handle('diag:autofix', (e, opts) => new Promise((resolve, reject) => {
     mods.diagAutofix(opts || {}, p => { try { e.sender.send('diag:autofix-progress', p); } catch (er) {} })

@@ -1450,6 +1450,7 @@ let CATALOG_SRC = localStorage.getItem('catalog_src') || 'modrinth';
         <div class="bd-actions">
           <button class="b-mini play" id="bdEdit" title="Изменить название и иконку">&#9998; ИЗМЕНИТЬ</button>
           <button class="b-mini" id="bdMigrate" title="Перенести сборку на другую версию Minecraft">&#8646; ПЕРЕНЕСТИ</button>
+          <button class="b-mini" id="bdChangeLoader" title="Сменить загрузчик (Fabric/Forge/NeoForge/Quilt)">&#9881; ЗАГРУЗЧИК</button>
         </div>
       </div>
       <div class="bd-btns">
@@ -1472,6 +1473,8 @@ let CATALOG_SRC = localStorage.getItem('catalog_src') || 'modrinth';
     if (be) be.addEventListener('click', () => openEditBuildModal(b));
     const bm = $('#bdMigrate');
     if (bm) bm.addEventListener('click', () => openMigrateModal(b));
+    const bl = $('#bdChangeLoader');
+    if (bl) bl.addEventListener('click', () => openChangeLoaderModal(b));
     $('#bdExport').addEventListener('click', handleExport);
     $('#bdImport').addEventListener('click', handleImport);
     $('#bdDel').addEventListener('click', () => {
@@ -1564,6 +1567,7 @@ let CATALOG_SRC = localStorage.getItem('catalog_src') || 'modrinth';
   // ===== ПЕРЕНОС СБОРКИ на другую версию Minecraft =====
   function openMigrateModal(b) {
     const releases = (Array.isArray(VERSION_LIST) ? VERSION_LIST : []).filter(v => v.type === 'release').slice(0, 60);
+    const currentLoader = (b.loader || 'vanilla').toLowerCase();
     openModal('ПЕРЕНОС СБОРКИ', `
       <div class="mig-head">
         <img src="${ic(b.icon || 'Grass.png')}" alt=""/>
@@ -1574,11 +1578,29 @@ let CATALOG_SRC = localStorage.getItem('catalog_src') || 'modrinth';
       </div>
       <div style="font-family:var(--mc-font-body);font-size:11.5px;color:var(--mc-grey-2);line-height:1.55;margin-bottom:10px">
         Будет создана <b>новая сборка</b> под выбранную версию — текущая останется нетронутой.
-        Лаунчер проверит каждый мод и найдёт его версию под новую игру. Моды, которых нет — будут перечислены в конце.
+        Можно сменить загрузчик одновременно с версией.
       </div>
       <div class="set-row"><div class="s-label">ЦЕЛЕВАЯ ВЕРСИЯ MINECRAFT</div>
         <select id="migVersion" style="background:var(--mc-grey-5);border:2px solid var(--mc-off-black);color:var(--mc-off-white);padding:8px 9px;font-family:var(--mc-font);font-size:12px;outline:none;width:220px">
           ${releases.map(v => `<option value="${escapeHtml(v.id)}"${v.id === b.gameVersion ? ' selected' : ''}>${escapeHtml(v.id)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="set-row"><div class="s-label">ЗАГРУЗЧИК</div><div class="s-desc">Оставить текущий или сменить</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          ${['fabric','forge','neoforge','quilt'].map(l => `
+            <div class="migLoaderBtn" data-loader="${l}" style="
+              padding:8px 14px;text-align:center;cursor:pointer;
+              background:${l === currentLoader ? 'rgba(0,200,83,.1)' : 'var(--mc-grey-5)'};
+              border:2px solid ${l === currentLoader ? 'var(--mc-green)' : 'var(--mc-off-black)'};
+              border-radius:5px;font-family:var(--mc-font);font-size:11px;
+              color:${l === currentLoader ? 'var(--mc-off-white)' : 'var(--mc-grey-2)'};transition:all .15s;
+            ">${LOADER_ICONS[l]} ${LOADER_NAMES[l]}</div>
+          `).join('')}
+        </div>
+      </div>
+      <div class="set-row" id="migLoaderVerRow" style="display:none"><div class="s-label">ВЕРСИЯ ЗАГРУЗЧИКА</div>
+        <select id="migLoaderVersion" style="background:var(--mc-grey-5);border:2px solid var(--mc-off-black);color:var(--mc-off-white);padding:8px 9px;font-family:var(--mc-font);font-size:12px;outline:none;width:220px">
+          <option value="">Загрузка...</option>
         </select>
       </div>
       <div class="set-row"><div class="s-label">МИРЫ И НАСТРОЙКИ</div><div class="s-desc">Перенести сохранения, конфиги и ресурспаки</div>
@@ -1586,17 +1608,47 @@ let CATALOG_SRC = localStorage.getItem('catalog_src') || 'modrinth';
       </div>
       <button class="play-btn" id="migGo" style="width:100%;margin-top:10px;font-size:14px">ПОДТВЕРДИТЬ ПЕРЕНОС</button>
     `, false, () => {
+      const mb = modal.querySelector('.modal');
+      if (mb) mb.style.width = '520px';
+      let migSelectedLoader = currentLoader;
+
+      // Обработка кликов по загрузчикам в migrate
+      document.querySelectorAll('.migLoaderBtn').forEach(el => {
+        el.addEventListener('click', () => {
+          const l = el.dataset.loader;
+          migSelectedLoader = l;
+          document.querySelectorAll('.migLoaderBtn').forEach(x => {
+            const isActive = x.dataset.loader === l;
+            x.style.borderColor = isActive ? 'var(--mc-green)' : 'var(--mc-off-black)';
+            x.style.background = isActive ? 'rgba(0,200,83,.1)' : 'var(--mc-grey-5)';
+            x.style.color = isActive ? 'var(--mc-off-white)' : 'var(--mc-grey-2)';
+          });
+          const verRow = $('#migLoaderVerRow');
+          if (verRow) verRow.style.display = 'block';
+          const gv = ($('#migVersion') || {}).value || b.gameVersion;
+          const sel = $('#migLoaderVersion');
+          if (sel) {
+            sel.innerHTML = '<option value="">Загрузка...</option>';
+            api.invoke('builds:loader-versions', l, gv).then(vers => {
+              if (!vers || !vers.length) { sel.innerHTML = '<option value="">Нет версий</option>'; return; }
+              sel.innerHTML = vers.map(v => `<option value="${escapeHtml(v.id)}"${v === vers[0] ? ' selected' : ''}>${escapeHtml(v.label)}</option>`).join('');
+            }).catch(() => { sel.innerHTML = '<option value="">Ошибка</option>'; });
+          }
+        });
+      });
+
       const go = $('#migGo');
       if (go) go.addEventListener('click', () => {
         const tv = $('#migVersion').value;
         const wd = $('#migData').checked;
+        const mlv = ($('#migLoaderVersion') || {}).value || '';
         modal.classList.remove('show');
-        runMigrate(b, tv, wd);
+        runMigrate(b, tv, wd, migSelectedLoader !== currentLoader ? migSelectedLoader : null, mlv);
       });
     });
   }
 
-  function runMigrate(b, targetVersion, withData) {
+  function runMigrate(b, targetVersion, withData, targetLoader, targetLoaderVersion) {
     openModal('ПЕРЕНОС СБОРКИ', `
       <div class="mig-prog">
         <div class="mp-lbl">АНАЛИЗ МОДОВ</div>
@@ -1612,7 +1664,7 @@ let CATALOG_SRC = localStorage.getItem('catalog_src') || 'modrinth';
       if (o) o.style.width = Math.round((p.overall || 0) * 100) + '%';
       if (s && p.stage) s.textContent = p.stage;
     });
-    api.invoke('builds:migrate', { buildId: b.id, targetVersion, withData })
+    api.invoke('builds:migrate', { buildId: b.id, targetVersion, withData, targetLoader: targetLoader || null, targetLoaderVersion: targetLoaderVersion || null })
       .then(res => {
         off();
         modal.classList.remove('show');
@@ -1654,6 +1706,161 @@ let CATALOG_SRC = localStorage.getItem('catalog_src') || 'modrinth';
       });
   }
 
+  // ===== СМЕНА ЗАГРУЗЧИКА СБОРКИ =====
+  const LOADER_ICONS = {
+    fabric: '🧵', forge: '⚒', neoforge: '🔥', quilt: '🪡', vanilla: '📦'
+  };
+  const LOADER_COLORS = {
+    fabric: '#db3449', forge: '#f5a623', neoforge: '#7b1fa2', quilt: '#3f51b5', vanilla: '#8bc34a'
+  };
+  const LOADER_NAMES = {
+    fabric: 'Fabric', forge: 'Forge', neoforge: 'NeoForge', quilt: 'Quilt', vanilla: 'Ванилла'
+  };
+
+  function openChangeLoaderModal(b) {
+    const loaders = ['fabric', 'forge', 'neoforge', 'quilt'];
+    const currentLoader = (b.loader || 'vanilla').toLowerCase();
+    const gb = (b.gameVersion || '1.21.1');
+
+    openModal('⚙ ИЗМЕНИТЬ ЗАГРУЗЧИК', `
+      <div class="mig-head">
+        <img src="${ic(b.icon || 'Grass.png')}" alt=""/>
+        <div>
+          <div class="mig-t">${escapeHtml(b.name)}</div>
+          <div class="mig-s">Сейчас: ${escapeHtml(gb)} &middot; ${escapeHtml(LOADER_NAMES[currentLoader] || currentLoader)} &middot; ${b.modCount || 0} модов</div>
+        </div>
+      </div>
+      <div style="font-family:var(--mc-font-body);font-size:11.5px;color:var(--mc-grey-2);line-height:1.55;margin-bottom:12px">
+        Будет создана <b>новая сборка</b> с теми же модами, но под другой загрузчик. Моды, которые не поддерживают выбранный загрузчик, не будут скачаны (их список получите в конце).
+      </div>
+      <div class="set-row">
+        <div class="s-label">НОВЫЙ ЗАГРУЗЧИК</div>
+        <div id="clLoaderGrid" style="display:flex;gap:8px;flex-wrap:wrap">
+          ${loaders.map(l => `
+            <div class="clLoaderBtn" data-loader="${l}" style="
+              flex:1;min-width:100px;padding:14px 10px;text-align:center;cursor:pointer;
+              background:${l === currentLoader ? LOADER_COLORS[l] + '22' : 'var(--mc-grey-5)'};
+              border:2px solid ${l === currentLoader ? LOADER_COLORS[l] : 'var(--mc-off-black)'};
+              border-radius:6px;transition:all .15s;
+            ">
+              <div style="font-size:22px">${LOADER_ICONS[l]}</div>
+              <div style="font-family:var(--mc-font);font-size:11px;color:${l === currentLoader ? LOADER_COLORS[l] : 'var(--mc-grey-2)'};margin-top:4px">${LOADER_NAMES[l]}</div>
+              ${l === currentLoader ? '<div style="font-family:var(--mc-font-body);font-size:9px;color:var(--mc-grey-3);margin-top:2px">ТЕКУЩИЙ</div>' : ''}
+            </div>
+          `).join('')}
+        </div>
+      </div>
+      <div class="set-row" id="clVersionRow" style="display:none">
+        <div class="s-label">ВЕРСИЯ ЗАГРУЗЧИКА</div>
+        <select id="clLoaderVersion" style="background:var(--mc-grey-5);border:2px solid var(--mc-off-black);color:var(--mc-off-white);padding:8px 9px;font-family:var(--mc-font);font-size:12px;outline:none;width:260px">
+          <option value="">Загрузка версий...</option>
+        </select>
+      </div>
+      <div id="clWarn" style="display:none;font-family:var(--mc-font-body);font-size:11px;color:#f0b90b;background:rgba(240,185,11,.08);border:1px dashed rgba(240,185,11,.5);border-radius:4px;padding:7px 10px;margin-bottom:10px"></div>
+      <button class="play-btn" id="clGo" disabled style="width:100%;margin-top:12px;font-size:14px;opacity:.5">СМЕНИТЬ ЗАГРУЗЧИК</button>
+    `, false, () => {
+      const mb = modal.querySelector('.modal');
+      if (mb) mb.style.width = '520px';
+      let selectedLoader = null;
+
+      // Обработка кликов по загрузчикам
+      document.querySelectorAll('.clLoaderBtn').forEach(el => {
+        el.addEventListener('click', () => {
+          const l = el.dataset.loader;
+          if (l === currentLoader) { selectedLoader = null; return; }
+          selectedLoader = l;
+          // Подсветка выбранного
+          document.querySelectorAll('.clLoaderBtn').forEach(x => {
+            const isActive = x.dataset.loader === l;
+            const col = LOADER_COLORS[x.dataset.loader];
+            x.style.borderColor = isActive ? col : 'var(--mc-off-black)';
+            x.style.background = isActive ? col + '22' : 'var(--mc-grey-5)';
+            x.querySelector('div:first-child').nextElementSibling.style.color = isActive ? col : 'var(--mc-grey-2)';
+          });
+          // Загрузка версий
+          const row = $('#clVersionRow');
+          const warn = $('#clWarn');
+          const goBtn = $('#clGo');
+          if (row) row.style.display = 'block';
+          if (warn) {
+            warn.style.display = 'block';
+            warn.textContent = 'При смене загрузчика часть модов может не поддерживать новый загрузчик (CurseForge-моды не переносятся).';
+          }
+          if (goBtn) { goBtn.disabled = false; goBtn.style.opacity = '1'; }
+          const sel = $('#clLoaderVersion');
+          if (sel) {
+            sel.innerHTML = '<option value="">Загрузка...</option>';
+            api.invoke('builds:loader-versions', l, gb).then(vers => {
+              if (!vers || !vers.length) {
+                sel.innerHTML = '<option value="">Нет версий для ' + gb + '</option>';
+                if (goBtn) { goBtn.disabled = true; goBtn.style.opacity = '.5'; }
+                return;
+              }
+              sel.innerHTML = vers.map(v => `<option value="${escapeHtml(v.id)}"${v === vers[0] ? ' selected' : ''}>${escapeHtml(v.label)}</option>`).join('');
+            }).catch(() => {
+              sel.innerHTML = '<option value="">Ошибка загрузки</option>';
+            });
+          }
+        });
+      });
+
+      // Кнопка "СМЕНИТЬ ЗАГРУЗЧИК"
+      const goBtn = $('#clGo');
+      if (goBtn) goBtn.addEventListener('click', () => {
+        if (!selectedLoader) return;
+        const ver = ($('#clLoaderVersion') || {}).value || '';
+        modal.classList.remove('show');
+        runChangeLoader(b, selectedLoader, ver);
+      });
+    });
+  }
+
+  function runChangeLoader(b, targetLoader, targetLoaderVersion) {
+    openModal('⚙ СМЕНА ЗАГРУЗЧИКА', `
+      <div class="mig-prog">
+        <div class="mp-lbl">УСТАНОВКА ЗАГРУЗЧИКА</div>
+        <div class="lp-bar alt"><div class="fill" id="clA" style="width:0%"></div></div>
+        <div class="mp-lbl">ОБЩИЙ ПРОГРЕСС</div>
+        <div class="lp-bar"><div class="fill" id="clO" style="width:0%"></div></div>
+        <div id="clStage" style="font-family:var(--mc-font-body);font-size:10.5px;color:var(--mc-grey-3);margin-top:8px">Подготовка...</div>
+      </div>
+    `, true);
+    const off = api.on('builds:migrate-loader-progress', p => {
+      const a = $('#clA'), o = $('#clO'), s = $('#clStage');
+      if (a) a.style.width = Math.round((p.analysis || 0) * 100) + '%';
+      if (o) o.style.width = Math.round((p.overall || 0) * 100) + '%';
+      if (s && p.stage) s.textContent = p.stage;
+    });
+    api.invoke('builds:migrate-loader', { buildId: b.id, targetLoader, targetLoaderVersion })
+      .then(res => {
+        off();
+        modal.classList.remove('show');
+        refreshBuilds();
+        const miss = res.missing || [];
+        openModal('⚙ СМЕНА ЗАГРУЗЧИКА ЗАВЕРШЕНА', `
+          <div style="font-family:var(--mc-font-body);font-size:12px;line-height:1.6;color:var(--mc-grey-2)">
+            <b>${escapeHtml(b.name)}</b> → <b>${escapeHtml(LOADER_NAMES[targetLoader] || targetLoader)}</b><br/>
+            ${res.moved} из ${res.total} модов перенесены на новый загрузчик.
+            ${miss.length ? `<div style="margin-top:10px;color:#f0b90b;font-weight:600">Не нашлись (${miss.length}):</div>
+            <div style="max-height:180px;overflow:auto;background:var(--mc-grey-5);border-radius:4px;padding:8px;margin-top:6px;font-size:11px">${miss.map(m2 => '• ' + escapeHtml(m2)).join('<br/>')}</div>` : '<div style="margin-top:8px;color:var(--mc-green)">Все моды совместимы! 🎉</div>'}
+          </div>
+          <button class="play-btn" id="clDone" style="width:100%;margin-top:12px;font-size:14px">ГОТОВО</button>
+        `, false, () => {
+          const d = $('#clDone');
+          if (d) d.addEventListener('click', () => modal.classList.remove('show'));
+        });
+      })
+      .catch(err => {
+        off();
+        modal.classList.remove('show');
+        openModal('Ошибка смены загрузчика', `<div style="color:#ca3636;font-family:var(--mc-font-body);font-size:12px">${escapeHtml(err.message || String(err))}</div>
+          <button class="secondary-btn" id="clErr" style="width:100%;margin-top:10px">ОК</button>`, false, () => {
+          const x = $('#clErr');
+          if (x) x.addEventListener('click', () => modal.classList.remove('show'));
+        });
+      });
+  }
+
   // ===== ОБЪЕДИНЕНИЕ СБОРОК =====
   function openMergeModal() {
     if (BUILD_LIST.length < 2) { mcToast('НУЖНО МИНИМУМ ДВЕ СБОРКИ'); return; }
@@ -1661,7 +1868,7 @@ let CATALOG_SRC = localStorage.getItem('catalog_src') || 'modrinth';
     openModal('ОБЪЕДИНЕНИЕ СБОРКИ', `
       <div style="font-family:var(--mc-font-body);font-size:11.5px;color:var(--mc-grey-2);line-height:1.55;margin-bottom:10px">
         Выберите <b>две или более</b> сборок — из их модов будет создана новая сборка.
-        Загрузчик берётся от первой выбранной. Повторяющиеся моды покажем в конце.
+        Выберите загрузчик и версию. Повторяющиеся моды покажем в конце.
       </div>
       <div id="mrgList" style="display:flex;flex-direction:column;gap:6px;max-height:200px;overflow:auto;margin-bottom:10px">
         ${BUILD_LIST.map((b, i) => `
@@ -1679,6 +1886,22 @@ let CATALOG_SRC = localStorage.getItem('catalog_src') || 'modrinth';
           ${releases.map(v => `<option value="${escapeHtml(v.id)}">${escapeHtml(v.id)}</option>`).join('')}
         </select>
       </div>
+      <div class="set-row"><div class="s-label">ЗАГРУЗЧИК</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          ${['fabric','forge','neoforge','quilt'].map(l => `
+            <div class="mrgLoaderBtn" data-loader="${l}" style="
+              padding:8px 14px;text-align:center;cursor:pointer;
+              background:var(--mc-grey-5);border:2px solid var(--mc-off-black);border-radius:5px;
+              font-family:var(--mc-font);font-size:11px;color:var(--mc-grey-2);transition:all .15s;
+            ">${LOADER_ICONS[l]} ${LOADER_NAMES[l]}</div>
+          `).join('')}
+        </div>
+      </div>
+      <div class="set-row" id="mrgLoaderVerRow" style="display:none"><div class="s-label">ВЕРСИЯ ЗАГРУЗЧИКА</div>
+        <select id="mrgLoaderVersion" style="background:var(--mc-grey-5);border:2px solid var(--mc-off-black);color:var(--mc-off-white);padding:8px 9px;font-family:var(--mc-font);font-size:12px;outline:none;width:200px">
+          <option value="">Загрузка...</option>
+        </select>
+      </div>
       <div class="set-row"><div class="s-label">НАЗВАНИЕ</div>
         <input id="mrgName" placeholder="Моя объединённая сборка" maxlength="48" style="background:var(--mc-grey-5);border:2px solid var(--mc-off-black);color:var(--mc-off-white);padding:7px 10px;font-family:var(--mc-font);font-size:12px;outline:none;width:200px"/>
       </div>
@@ -1687,13 +1910,47 @@ let CATALOG_SRC = localStorage.getItem('catalog_src') || 'modrinth';
       </div>
       <button class="play-btn" id="mrgGo" style="width:100%;margin-top:10px;font-size:14px">ОБЪЕДИНИТЬ</button>
     `, false, () => {
+      const mb = modal.querySelector('.modal');
+      if (mb) mb.style.width = '540px';
+      let mrgSelectedLoader = null;
+
+      // Обработка кликов по загрузчикам в merge
+      document.querySelectorAll('.mrgLoaderBtn').forEach(el => {
+        el.addEventListener('click', () => {
+          const l = el.dataset.loader;
+          mrgSelectedLoader = l;
+          document.querySelectorAll('.mrgLoaderBtn').forEach(x => {
+            const isActive = x.dataset.loader === l;
+            x.style.borderColor = isActive ? 'var(--mc-green)' : 'var(--mc-off-black)';
+            x.style.background = isActive ? 'rgba(0,200,83,.1)' : 'var(--mc-grey-5)';
+            x.style.color = isActive ? 'var(--mc-off-white)' : 'var(--mc-grey-2)';
+          });
+          // Загрузка версий
+          const verRow = $('#mrgLoaderVerRow');
+          if (verRow) verRow.style.display = 'block';
+          const gv = ($('#mrgVersion') || {}).value || '1.21.1';
+          const sel = $('#mrgLoaderVersion');
+          if (sel) {
+            sel.innerHTML = '<option value="">Загрузка...</option>';
+            api.invoke('builds:loader-versions', l, gv).then(vers => {
+              if (!vers || !vers.length) { sel.innerHTML = '<option value="">Нет версий</option>'; return; }
+              sel.innerHTML = vers.map(v => `<option value="${escapeHtml(v.id)}"${v === vers[0] ? ' selected' : ''}>${escapeHtml(v.label)}</option>`).join('');
+            }).catch(() => { sel.innerHTML = '<option value="">Ошибка</option>'; });
+          }
+        });
+      });
+
       const warn = $('#mrgWarn');
       const checkWarn = () => {
         const sel = Array.from(document.querySelectorAll('.mrgChk:checked'));
         const gvs = [...new Set(sel.map(c => c.dataset.gv))];
+        const lds = [...new Set(sel.map(c => c.dataset.ld))];
         if (warn) {
-          warn.style.display = gvs.length > 1 ? 'block' : 'none';
-          if (gvs.length > 1) warn.textContent = 'У выбранных сборок разные версии игры (' + gvs.join(', ') + '). Постараемся найти моды под выбранную вами версию.';
+          const msgs = [];
+          if (gvs.length > 1) msgs.push('разные версии игры (' + gvs.join(', ') + ')');
+          if (lds.length > 1) msgs.push('разные загрузчики (' + lds.join(', ') + ')');
+          warn.style.display = msgs.length > 0 ? 'block' : 'none';
+          if (msgs.length > 0) warn.textContent = 'У выбранных сборок ' + msgs.join(', ') + '. Будет использован загрузчик из выпадающего списка.';
         }
       };
       document.querySelectorAll('.mrgChk').forEach(c => c.addEventListener('change', checkWarn));
@@ -1704,13 +1961,14 @@ let CATALOG_SRC = localStorage.getItem('catalog_src') || 'modrinth';
         const tv = $('#mrgVersion').value;
         const nm = $('#mrgName').value.trim();
         const cfg = $('#mrgConfigs').checked;
+        const mlv = ($('#mrgLoaderVersion') || {}).value || '';
         modal.classList.remove('show');
-        runMerge(sel, tv, cfg, nm);
+        runMerge(sel, tv, cfg, nm, mrgSelectedLoader, mlv);
       });
     });
   }
 
-  function runMerge(buildIds, targetVersion, withConfigs, name) {
+  function runMerge(buildIds, targetVersion, withConfigs, name, targetLoader, targetLoaderVersion) {
     openModal('ОБЪЕДИНЕНИЕ СБОРКИ', `
       <div class="mig-prog">
         <div class="mp-lbl">АНАЛИЗ МОДОВ</div>
@@ -1726,7 +1984,7 @@ let CATALOG_SRC = localStorage.getItem('catalog_src') || 'modrinth';
       if (o) o.style.width = Math.round((p.overall || 0) * 100) + '%';
       if (s && p.stage) s.textContent = p.stage;
     });
-    api.invoke('builds:merge', { buildIds, targetVersion, withConfigs, name })
+    api.invoke('builds:merge', { buildIds, targetVersion, withConfigs, name, targetLoader: targetLoader || null, targetLoaderVersion: targetLoaderVersion || null })
       .then(res => {
         off();
         modal.classList.remove('show');

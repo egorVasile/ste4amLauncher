@@ -19,12 +19,12 @@
                   {
                       "path":  "src/main/main.js",
                       "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/main/main.js",
-                      "sha256":  "c1f7829a36d04981912478c5ccfbd51050afe0e0e22fbfbc4a51f5a537e84eec"
+                      "sha256":  "4e069c8c075c4dccb00cfa6783d892e6f8a737a134ac320d55ea736766b2c4f7"
                   },
                   {
                       "path":  "src/main/mods.js",
                       "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/main/mods.js",
-                      "sha256":  "a399102263a3442c30591a5837b78b25b8ce624a032a29d703829399b6c86ebb"
+                      "sha256":  "291bff6ea644bc5a9062f848d397c6e460cb65079ffa4e2e152def456a85772b"
                   },
                   {
                       "path":  "src/main/party.js",
@@ -44,12 +44,12 @@
                   {
                       "path":  "src/preload/preload.js",
                       "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/preload/preload.js",
-                      "sha256":  "5329612410817e8515034690a5d2a52aea9a57c7484d44ed66d3a5d83cf81b6a"
+                      "sha256":  "ff3e07166747de5422d2a3161a9e67f510b622dd7e955f1768e5c5ea4f5f8060"
                   },
                   {
                       "path":  "src/renderer/app.js",
                       "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/src/renderer/app.js",
-                      "sha256":  "ac54b091f6b220a50d11725979ff5b768a711453e1424860404118844614fbd0"
+                      "sha256":  "a31bedd9fcf41ddb2ef9079d3e963fe44ed0bc9089086c4e6dd6369d7e26d3a3"
                   },
                   {
                       "path":  "src/renderer/icon.png",
@@ -89,7 +89,7 @@
                   {
                       "path":  "package.json",
                       "url":  "https://raw.githubusercontent.com/egorVasile/ste4amLauncher/main/package.json",
-                      "sha256":  "b498657a7b92b1c28a413bbf5119e55c17893a71b12e5f8c41a6bef8b9d92b00"
+                      "sha256":  "8878386a0b4ada450e541bad0b5b756d92aae764d0b6f599eb4a9eddfbd484e4"
                   },
                   {
                       "path":  "updater.js",
@@ -97,5 +97,5 @@
                       "sha256":  "3c1a8f6b15977a98605055418d18eeae610da9969e2d82695efa3841eab77947"
                   }
               ],
-    "version":  "3.1.1"
+    "version":  "3.2.1"
 }
